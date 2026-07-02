@@ -1,0 +1,21 @@
+node_modules
+dist
+.turbo
+.pnpm-store
+
+# Environment files
+.env
+.env.local
+.env.*.local
+apps/server/.env
+
+# Build output
+coverage
+.vite
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea
+.vscode
+

@@ -1,0 +1,15 @@
+{
+  "name": "aldrym",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "build": "corepack pnpm -r build",
+    "typecheck": "corepack pnpm -r typecheck",
+    "dev:web": "corepack pnpm --filter @aldrym/web dev",
+    "dev:server": "corepack pnpm --filter @aldrym/server start:dev",
+    "db:migrate": "corepack pnpm --filter @aldrym/server db:migrate",
+    "prisma:migrate": "corepack pnpm --filter @aldrym/server db:migrate",
+    "prisma:generate": "corepack pnpm --filter @aldrym/server prisma:generate"
+  }
+}

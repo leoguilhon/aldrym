@@ -1,0 +1,103 @@
+# Aldrym
+
+Aldrym is an original 2D browser-based old-school MMORPG foundation. This repository captures the technical starting point for a browser game inspired by the pacing and danger of classic Tibia-like MMORPGs while keeping all concrete creative content original.
+
+## Stack
+
+- React
+- Vite
+- TypeScript
+- Phaser
+- Node.js
+- NestJS
+- Socket.IO
+- PostgreSQL
+- Prisma
+- pnpm workspaces
+
+## Folder Structure
+
+```text
+aldrym/
+  apps/
+    server/   # NestJS + Socket.IO + Prisma
+    web/      # React + Vite + TypeScript placeholder client
+  packages/
+    shared/   # Shared TypeScript types
+  docs/
+    database_model.md
+    event_contracts.md
+    game_design.md
+    originality_copyright.md
+    roadmap.md
+    technical_architecture.md
+  AGENTS.md
+  docker-compose.yml
+  package.json
+  pnpm-workspace.yaml
+  README.md
+```
+
+## Local Setup
+
+For a dedicated developer startup guide, see [docs/developer_setup.md](C:/infnet/aldrym/docs/developer_setup.md:1).
+
+1. Enable Corepack if needed:
+
+```powershell
+corepack enable
+```
+
+2. Install workspace dependencies:
+
+```powershell
+corepack pnpm install
+```
+
+3. Create the server environment file:
+
+```powershell
+Copy-Item apps/server/.env.example apps/server/.env
+```
+
+4. Start PostgreSQL:
+
+```powershell
+docker compose up -d
+```
+
+5. Run the initial Prisma migration:
+
+```powershell
+corepack pnpm prisma:migrate
+```
+
+6. Start the server:
+
+```powershell
+corepack pnpm dev:server
+```
+
+7. Start the web app in another terminal:
+
+```powershell
+corepack pnpm dev:web
+```
+
+## Useful Commands
+
+```powershell
+corepack pnpm install
+corepack pnpm build
+corepack pnpm typecheck
+corepack pnpm prisma:generate
+corepack pnpm prisma:migrate
+corepack pnpm dev:server
+corepack pnpm dev:web
+docker compose up -d
+docker compose down
+```
+
+## Current Scope
+
+This foundation intentionally does not include gameplay systems yet. There is no authentication flow, map rendering, movement, combat, inventory, or quest logic in this initial setup.
