@@ -7,19 +7,31 @@ datasource db {
 }
 
 model User {
-  id         String      @id @default(cuid())
-  email      String      @unique
-  createdAt  DateTime    @default(now())
-  updatedAt  DateTime    @updatedAt
-  characters Character[]
+  id           String      @id @default(cuid())
+  email        String      @unique
+  passwordHash String
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  characters   Character[]
 }
 
 model Character {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  level     Int      @default(1)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  name       String   @unique
+  gender     String
+  level      Int      @default(1)
+  experience Int      @default(0)
+  health     Int      @default(100)
+  maxHealth  Int      @default(100)
+  mana       Int      @default(50)
+  maxMana    Int      @default(50)
+  x          Int      @default(100)
+  y          Int      @default(100)
+  z          Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }

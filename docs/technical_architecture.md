@@ -16,9 +16,9 @@
 
 ## Current Foundation
 
-- Web app placeholder without Phaser scene or canvas mounting yet
-- NestJS server with a `/health` endpoint
+- Web app with React Router pages for login, registration, character selection, character creation, and a placeholder world-entry route
+- Frontend authentication state stored in localStorage-backed React context
+- NestJS server with a `/health` endpoint and REST modules for authentication and character management
 - Socket.IO-ready gateway placeholder
-- Prisma schema with only `User` and `Character`
-- Shared package for cross-project type contracts
-
+- Prisma schema with `User` and `Character` for account ownership and spawn state
+- Shared package for API and gameplay-adjacent type contracts

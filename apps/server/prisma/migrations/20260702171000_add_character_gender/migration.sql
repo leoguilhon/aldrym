@@ -1,0 +1,5 @@
+ALTER TABLE "Character"
+ADD COLUMN "gender" TEXT NOT NULL DEFAULT 'male';
+
+ALTER TABLE "Character"
+ALTER COLUMN "gender" DROP DEFAULT;

@@ -24,13 +24,19 @@ corepack pnpm install
 Copy-Item apps/server/.env.example apps/server/.env
 ```
 
-3. Start PostgreSQL with Docker Compose:
+3. Create the local web environment file if it does not exist yet:
+
+```powershell
+Copy-Item apps/web/.env.example apps/web/.env
+```
+
+4. Start PostgreSQL with Docker Compose:
 
 ```powershell
 docker compose up -d
 ```
 
-4. Apply the Prisma migration:
+5. Apply the Prisma migration:
 
 ```powershell
 corepack pnpm prisma:migrate
@@ -54,6 +60,7 @@ corepack pnpm dev:web
 
 ```powershell
 corepack pnpm install
+Copy-Item apps/web/.env.example apps/web/.env
 docker compose up -d
 corepack pnpm prisma:migrate
 corepack pnpm dev:server
@@ -64,6 +71,7 @@ corepack pnpm dev:web
 
 - Web: `http://localhost:5173`
 - Server health: `http://localhost:3000/health`
+- Frontend API base URL: `apps/web/.env`
 
 ## Stop the Environment
 

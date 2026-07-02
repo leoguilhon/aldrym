@@ -21,7 +21,7 @@ Aldrym is an original 2D browser-based old-school MMORPG foundation. This reposi
 aldrym/
   apps/
     server/   # NestJS + Socket.IO + Prisma
-    web/      # React + Vite + TypeScript placeholder client
+    web/      # React + Vite + TypeScript auth and character management client
   packages/
     shared/   # Shared TypeScript types
   docs/
@@ -60,28 +60,40 @@ corepack pnpm install
 Copy-Item apps/server/.env.example apps/server/.env
 ```
 
-4. Start PostgreSQL:
+4. Create the web environment file:
+
+```powershell
+Copy-Item apps/web/.env.example apps/web/.env
+```
+
+5. Start PostgreSQL:
 
 ```powershell
 docker compose up -d
 ```
 
-5. Run the initial Prisma migration:
+6. Run the initial Prisma migration:
 
 ```powershell
 corepack pnpm prisma:migrate
 ```
 
-6. Start the server:
+7. Start the server:
 
 ```powershell
 corepack pnpm dev:server
 ```
 
-7. Start the web app in another terminal:
+8. Start the web app in another terminal:
 
 ```powershell
 corepack pnpm dev:web
+```
+
+The default frontend API configuration is:
+
+```powershell
+VITE_API_BASE_URL="http://localhost:3000"
 ```
 
 ## Useful Commands
@@ -100,4 +112,4 @@ docker compose down
 
 ## Current Scope
 
-This foundation intentionally does not include gameplay systems yet. There is no authentication flow, map rendering, movement, combat, inventory, or quest logic in this initial setup.
+This foundation intentionally does not include gameplay systems yet. The current client supports authentication, character selection, character creation, and a placeholder world-entry page, but there is still no Phaser game canvas, map rendering, movement, combat, inventory, or quest logic.

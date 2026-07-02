@@ -1,16 +1,49 @@
-export interface Position {
-  x: number;
-  y: number;
-  layer: number;
+export interface RegisterRequest {
+  email: string;
+  password: string;
 }
 
-export type Direction = "north" | "east" | "south" | "west";
+export interface LoginRequest {
+  email: string;
+  password: string;
+}
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthResponse {
+  accessToken: string;
+  user: AuthUser;
+}
+
+export type CharacterGender = "male" | "female";
+
+export interface CreateCharacterRequest {
+  name: string;
+  gender: CharacterGender;
+}
+
+export interface DeleteCharacterRequest {
+  password: string;
+}
 
 export interface CharacterSummary {
   id: string;
   name: string;
+  gender: CharacterGender;
   level: number;
-  position: Position;
-  direction: Direction;
+  experience: number;
+  health: number;
+  maxHealth: number;
+  mana: number;
+  maxMana: number;
+  x: number;
+  y: number;
+  z: number;
+  createdAt: string;
+  updatedAt: string;
 }
-
