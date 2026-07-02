@@ -16,16 +16,18 @@
 
 ## Current Foundation
 
-- Web app with React Router pages for login, registration, character selection, character creation, and an authenticated offline world-entry route
+- Web app with React Router pages for login, registration, character selection, character creation, and an authenticated world-entry route
 - Frontend authentication state stored in localStorage-backed React context
 - NestJS server with a `/health` endpoint and REST modules for authentication and character management
-- Socket.IO-ready gateway placeholder
+- Socket.IO world gateway with JWT-authenticated connections
 - Prisma schema with `User` and `Character` for account ownership and spawn state
-- Shared package for API and gameplay-adjacent type contracts
+- Shared package for API, world map, and gameplay-adjacent type contracts
 
-## Offline Client Prototype
+## World Join and Movement
 
-- `apps/web` now mounts a local Phaser scene at `/game/:characterId`
-- The page fetches the selected character through the authenticated REST API before the client is created
-- The Phaser prototype uses a generated tile grid with local-only movement, collision, and camera follow
-- No gameplay Socket.IO events or backend movement validation are wired yet; this step is intentionally offline-only
+- `apps/web` mounts the Phaser client at `/game/:characterId` after the selected character is verified through the authenticated REST API
+- The client opens a Socket.IO connection with the JWT token in the connection auth payload
+- `apps/server` authenticates sockets, verifies character ownership on `world:join`, and tracks online players in a small in-memory world state
+- Movement is intent-based: the client sends directions and the server calculates the next tile using the shared map rules
+- The same shared local map definition is used for spawn clamping and blocked-tile validation on both the frontend and backend
+- Character position is saved to PostgreSQL only when a joined socket disconnects

@@ -8,6 +8,7 @@ import { CharactersService } from "./characters.service";
 @Module({
   imports: [AuthModule, UsersModule],
   controllers: [CharactersController],
-  providers: [CharactersService]
+  providers: [CharactersService],
+  exports: [CharactersService]
 })
 export class CharactersModule {}

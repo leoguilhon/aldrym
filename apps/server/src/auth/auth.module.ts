@@ -30,6 +30,6 @@ function getJwtSecret(): string {
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtAuthGuard],
-  exports: [JwtModule, JwtAuthGuard]
+  exports: [AuthService, JwtModule, JwtAuthGuard]
 })
 export class AuthModule {}

@@ -1,4 +1,4 @@
-import type { CharacterSummary } from "@aldrym/shared";
+import type { CharacterSummary, Position } from "@aldrym/shared";
 import { ConflictException, Inject, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { compare } from "bcryptjs";
 
@@ -94,6 +94,20 @@ export class CharactersService {
     await this.prisma.character.delete({
       where: {
         id: character.id
+      }
+    });
+  }
+
+  async savePositionForUserCharacter(userId: string, characterId: string, position: Position): Promise<void> {
+    await this.prisma.character.updateMany({
+      where: {
+        id: characterId,
+        userId
+      },
+      data: {
+        x: position.x,
+        y: position.y,
+        z: position.z
       }
     });
   }

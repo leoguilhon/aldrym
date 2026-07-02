@@ -1,15 +1,12 @@
-import type { Position } from "@aldrym/shared";
+import type { MoveDirection, WorldPlayer } from "@aldrym/shared";
 import Phaser from "phaser";
 
 import {
   LOCAL_TILE_PALETTE,
   getTileCenter,
   getTileType,
-  isWalkableTile,
   type LocalMapData
 } from "../map/localMap";
-
-type MoveDirection = "up" | "down" | "left" | "right";
 
 interface MovementKeys {
   up?: Phaser.Input.Keyboard.Key;
@@ -18,10 +15,16 @@ interface MovementKeys {
   right?: Phaser.Input.Keyboard.Key;
 }
 
+interface PlayerView {
+  container: Phaser.GameObjects.Container;
+  label: Phaser.GameObjects.Text;
+}
+
 export interface MainSceneOptions {
-  initialPosition: Position;
+  initialPlayers: WorldPlayer[];
+  localCharacterId: string;
   map: LocalMapData;
-  onPositionChange?: (position: Position) => void;
+  onMoveIntent?: (direction: MoveDirection) => void;
 }
 
 const CAMERA_ZOOM = 2;
@@ -29,34 +32,34 @@ const MOVE_COOLDOWN_MS = 140;
 const MOVE_TWEEN_DURATION_MS = 100;
 
 export class MainScene extends Phaser.Scene {
-  private readonly initialPosition: Position;
+  private readonly localCharacterId: string;
   private readonly map: LocalMapData;
-  private readonly onPositionChange?: (position: Position) => void;
+  private readonly onMoveIntent?: (direction: MoveDirection) => void;
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private movementKeys?: MovementKeys;
   private nextMoveAt = 0;
-  private isMoving = false;
-  private playerPosition: Position;
-  private player?: Phaser.GameObjects.Container;
+  private isSceneReady = false;
+  private pendingPlayers: WorldPlayer[];
+  private readonly playerViews = new Map<string, PlayerView>();
 
   constructor(options: MainSceneOptions) {
     super({ key: "main-scene" });
-    this.initialPosition = { ...options.initialPosition };
+    this.localCharacterId = options.localCharacterId;
     this.map = options.map;
-    this.onPositionChange = options.onPositionChange;
-    this.playerPosition = { ...options.initialPosition };
+    this.onMoveIntent = options.onMoveIntent;
+    this.pendingPlayers = options.initialPlayers;
   }
 
   create(): void {
     this.drawMap();
-    this.createPlayer();
     this.createControls();
     this.configureCamera();
-    this.onPositionChange?.(this.playerPosition);
+    this.isSceneReady = true;
+    this.syncPlayers(this.pendingPlayers);
   }
 
   update(time: number): void {
-    if (this.isMoving || time < this.nextMoveAt) {
+    if (!this.onMoveIntent || time < this.nextMoveAt) {
       return;
     }
 
@@ -67,7 +70,15 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.nextMoveAt = time + MOVE_COOLDOWN_MS;
-    this.tryMove(direction);
+    this.onMoveIntent(direction);
+  }
+
+  setPlayers(players: WorldPlayer[]): void {
+    this.pendingPlayers = players.map((player) => ({ ...player }));
+
+    if (this.isSceneReady) {
+      this.syncPlayers(this.pendingPlayers);
+    }
   }
 
   private drawMap(): void {
@@ -122,21 +133,6 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
-  private createPlayer(): void {
-    const { x, y } = getTileCenter(this.map, this.initialPosition);
-    const shadow = this.add.ellipse(0, 8, 18, 10, 0x000000, 0.28);
-    const body = this.add.rectangle(0, -3, 18, 22, 0xc79e62, 1);
-    const tunic = this.add.rectangle(0, 0, 12, 12, 0x6c4b2f, 1);
-    const head = this.add.ellipse(0, -13, 10, 10, 0xe6cfaa, 1);
-
-    body.setStrokeStyle(2, 0x2e1a10, 1);
-    tunic.setStrokeStyle(1, 0x3e2a19, 1);
-    head.setStrokeStyle(1, 0x72583c, 1);
-
-    this.player = this.add.container(x, y, [shadow, body, tunic, head]);
-    this.player.setDepth(20);
-  }
-
   private createControls(): void {
     const keyboard = this.input.keyboard;
 
@@ -154,10 +150,6 @@ export class MainScene extends Phaser.Scene {
   }
 
   private configureCamera(): void {
-    if (!this.player) {
-      return;
-    }
-
     const worldWidth = this.map.width * this.map.tileSize;
     const worldHeight = this.map.height * this.map.tileSize;
     const camera = this.cameras.main;
@@ -166,7 +158,6 @@ export class MainScene extends Phaser.Scene {
     camera.setBounds(0, 0, worldWidth, worldHeight);
     camera.setRoundPixels(true);
     camera.setZoom(CAMERA_ZOOM);
-    camera.startFollow(this.player, true, 0.2, 0.2);
   }
 
   private getRequestedDirection(): MoveDirection | null {
@@ -193,47 +184,72 @@ export class MainScene extends Phaser.Scene {
     return keys.some((key) => Boolean(key?.isDown));
   }
 
-  private tryMove(direction: MoveDirection): void {
-    if (!this.player) {
+  private syncPlayers(players: WorldPlayer[]): void {
+    const activeCharacterIds = new Set(players.map((player) => player.characterId));
+
+    for (const player of players) {
+      this.upsertPlayerView(player);
+    }
+
+    for (const [characterId, view] of this.playerViews.entries()) {
+      if (!activeCharacterIds.has(characterId)) {
+        view.container.destroy(true);
+        this.playerViews.delete(characterId);
+      }
+    }
+
+    const localPlayerView = this.playerViews.get(this.localCharacterId);
+
+    if (localPlayerView) {
+      this.cameras.main.startFollow(localPlayerView.container, true, 0.2, 0.2);
+    }
+  }
+
+  private upsertPlayerView(player: WorldPlayer): void {
+    const existingView = this.playerViews.get(player.characterId);
+    const { x, y } = getTileCenter(this.map, player);
+
+    if (!existingView) {
+      this.playerViews.set(player.characterId, this.createPlayerView(player, x, y));
       return;
     }
 
-    const targetPosition = this.getTargetPosition(direction);
-
-    if (!isWalkableTile(this.map, targetPosition)) {
-      return;
-    }
-
-    this.playerPosition = targetPosition;
-    this.isMoving = true;
-    this.onPositionChange?.(this.playerPosition);
-
-    const { x, y } = getTileCenter(this.map, targetPosition);
-
+    existingView.label.setText(player.name);
+    this.tweens.killTweensOf(existingView.container);
     this.tweens.add({
-      targets: this.player,
+      targets: existingView.container,
       x,
       y,
       duration: MOVE_TWEEN_DURATION_MS,
-      ease: "Quad.easeOut",
-      onComplete: () => {
-        this.isMoving = false;
-      }
+      ease: "Quad.easeOut"
     });
   }
 
-  private getTargetPosition(direction: MoveDirection): Position {
-    switch (direction) {
-      case "up":
-        return { ...this.playerPosition, y: this.playerPosition.y - 1 };
-      case "down":
-        return { ...this.playerPosition, y: this.playerPosition.y + 1 };
-      case "left":
-        return { ...this.playerPosition, x: this.playerPosition.x - 1 };
-      case "right":
-        return { ...this.playerPosition, x: this.playerPosition.x + 1 };
-      default:
-        return this.playerPosition;
-    }
+  private createPlayerView(player: WorldPlayer, x: number, y: number): PlayerView {
+    const isLocalPlayer = player.characterId === this.localCharacterId;
+    const label = this.add.text(0, -24, player.name, {
+      color: "#f2e5c8",
+      fontFamily: "Georgia",
+      fontSize: "11px",
+      stroke: "#120c08",
+      strokeThickness: 3
+    });
+    const shadow = this.add.ellipse(0, 8, 18, 10, 0x000000, 0.28);
+    const body = this.add.rectangle(0, -3, 18, 22, isLocalPlayer ? 0xc79e62 : 0xa9a6a0, 1);
+    const tunic = this.add.rectangle(0, 0, 12, 12, isLocalPlayer ? 0x6c4b2f : 0x42546a, 1);
+    const head = this.add.ellipse(0, -13, 10, 10, 0xe6cfaa, 1);
+
+    label.setOrigin(0.5, 1);
+    body.setStrokeStyle(2, 0x2e1a10, 1);
+    tunic.setStrokeStyle(1, 0x3e2a19, 1);
+    head.setStrokeStyle(1, 0x72583c, 1);
+
+    const container = this.add.container(x, y, [label, shadow, body, tunic, head]);
+    container.setDepth(isLocalPlayer ? 20 : 16);
+
+    return {
+      container,
+      label
+    };
   }
 }

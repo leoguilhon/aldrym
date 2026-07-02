@@ -6,7 +6,7 @@ import { hash, compare } from "bcryptjs";
 import { isPrismaUniqueConstraintError } from "../prisma/prisma-error.util";
 import { toAuthUser } from "../users/user.mapper";
 import { UsersService } from "../users/users.service";
-import type { JwtTokenPayload } from "./authenticated-user.interface";
+import type { AuthenticatedUser, JwtTokenPayload } from "./authenticated-user.interface";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterDto } from "./dto/register.dto";
 
@@ -63,6 +63,35 @@ export class AuthService {
     }
 
     return toAuthUser(user);
+  }
+
+  async verifyAccessToken(token: string): Promise<AuthenticatedUser> {
+    try {
+      const payload = await this.jwtService.verifyAsync<JwtTokenPayload>(token);
+
+      return {
+        id: payload.sub,
+        email: payload.email
+      };
+    } catch {
+      throw new UnauthorizedException("Invalid or expired token");
+    }
+  }
+
+  extractBearerToken(authorization?: string | string[]): string | null {
+    const header = Array.isArray(authorization) ? authorization[0] : authorization;
+
+    if (!header) {
+      return null;
+    }
+
+    const [type, token] = header.split(" ");
+
+    if (type !== "Bearer" || !token) {
+      return null;
+    }
+
+    return token;
   }
 
   private async buildAuthResponse(user: {

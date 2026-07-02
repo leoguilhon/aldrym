@@ -1,34 +1,39 @@
-import type { CharacterSummary, Position } from "@aldrym/shared";
+import type { MoveDirection, WorldPlayer } from "@aldrym/shared";
 import Phaser from "phaser";
 
 import { createGameConfig } from "./config/gameConfig";
-import { createLocalMap, resolveLocalPlayerSpawn } from "./map/localMap";
+import { createLocalMap } from "./map/localMap";
 import { MainScene } from "./scenes/MainScene";
 
 export interface AldrymGameOptions {
-  character: CharacterSummary;
-  onPositionChange?: (position: Position) => void;
+  localCharacterId: string;
+  onMoveIntent?: (direction: MoveDirection) => void;
   parent: HTMLElement;
+  players: WorldPlayer[];
 }
 
 export class AldrymGame {
   private readonly game: Phaser.Game;
+  private readonly scene: MainScene;
 
   constructor(options: AldrymGameOptions) {
-    const map = createLocalMap();
-    const initialPosition = resolveLocalPlayerSpawn(map, options.character);
-    const scene = new MainScene({
-      initialPosition,
-      map,
-      onPositionChange: options.onPositionChange
+    this.scene = new MainScene({
+      initialPlayers: options.players,
+      localCharacterId: options.localCharacterId,
+      map: createLocalMap(),
+      onMoveIntent: options.onMoveIntent
     });
 
     this.game = new Phaser.Game(
       createGameConfig({
         parent: options.parent,
-        scene
+        scene: this.scene
       })
     );
+  }
+
+  setPlayers(players: WorldPlayer[]): void {
+    this.scene.setPlayers(players);
   }
 
   destroy(): void {

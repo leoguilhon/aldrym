@@ -18,7 +18,7 @@ interface ApiErrorResponse {
 
 const fallbackApiBaseUrl = "http://localhost:3000";
 
-function getApiBaseUrl(): string {
+export function getApiBaseUrl(): string {
   const configuredUrl = import.meta.env.VITE_API_BASE_URL?.trim();
 
   if (!configuredUrl) {
