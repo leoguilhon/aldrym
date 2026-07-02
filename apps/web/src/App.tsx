@@ -1,4 +1,4 @@
-import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 
 import { useAuth } from "./auth/auth-context";
 import { ProtectedRoute, PublicOnlyRoute } from "./auth/route-guards";
@@ -6,10 +6,10 @@ import { StatusView } from "./components/status-view";
 import { AuthenticatedLayout } from "./layouts/authenticated-layout";
 import { CharacterCreationPage } from "./pages/character-creation-page";
 import { CharacterSelectionPage } from "./pages/character-selection-page";
+import { GamePage } from "./pages/game-page";
 import { LoginPage } from "./pages/login-page";
 import { NotFoundPage } from "./pages/not-found-page";
 import { RegisterPage } from "./pages/register-page";
-import { WorldPlaceholderPage } from "./pages/world-placeholder-page";
 
 function HomeRedirect() {
   const { isAuthenticated } = useAuth();
@@ -23,6 +23,16 @@ function AuthenticatedOutlet() {
       <Outlet />
     </AuthenticatedLayout>
   );
+}
+
+function LegacyWorldRedirect() {
+  const { characterId } = useParams();
+
+  if (!characterId) {
+    return <Navigate replace to="/characters" />;
+  }
+
+  return <Navigate replace to={`/game/${characterId}`} />;
 }
 
 function App() {
@@ -50,7 +60,8 @@ function App() {
         <Route element={<AuthenticatedOutlet />}>
           <Route path="/characters" element={<CharacterSelectionPage />} />
           <Route path="/characters/create" element={<CharacterCreationPage />} />
-          <Route path="/world/:characterId" element={<WorldPlaceholderPage />} />
+          <Route path="/game/:characterId" element={<GamePage />} />
+          <Route path="/world/:characterId" element={<LegacyWorldRedirect />} />
         </Route>
       </Route>
 

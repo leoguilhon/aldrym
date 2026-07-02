@@ -22,6 +22,12 @@ export interface AuthResponse {
 
 export type CharacterGender = "male" | "female";
 
+export interface Position {
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface CreateCharacterRequest {
   name: string;
   gender: CharacterGender;
@@ -31,7 +37,7 @@ export interface DeleteCharacterRequest {
   password: string;
 }
 
-export interface CharacterSummary {
+export interface CharacterSummary extends Position {
   id: string;
   name: string;
   gender: CharacterGender;
@@ -41,9 +47,6 @@ export interface CharacterSummary {
   maxHealth: number;
   mana: number;
   maxMana: number;
-  x: number;
-  y: number;
-  z: number;
   createdAt: string;
   updatedAt: string;
 }

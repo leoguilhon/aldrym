@@ -274,7 +274,7 @@ export function CharacterSelectionPage() {
               onCancelDelete={closeDeleteConfirmation}
               onDeleteCharacter={handleDeleteCharacter}
               onDeletePasswordChange={setDeletePassword}
-              onEnterWorld={(characterId) => navigate(`/world/${characterId}`)}
+              onEnterWorld={(characterId) => navigate(`/game/${characterId}`)}
               onStartDelete={openDeleteConfirmation}
             />
           ))}
