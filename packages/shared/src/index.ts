@@ -51,9 +51,36 @@ export interface CharacterSummary extends Position {
   updatedAt: string;
 }
 
-export const moveDirections = ["up", "down", "left", "right"] as const;
+export const moveDirections = ["up", "down", "left", "right", "up-left", "up-right", "down-left", "down-right"] as const;
 
 export type MoveDirection = (typeof moveDirections)[number];
+
+const baseMovementCooldownMs = 700;
+const diagonalMovementCooldownMultiplier = 1.4;
+const movementCooldownReductionPerLevelMs = 20;
+const minimumMovementCooldownMs = 350;
+const minimumMovementTweenDurationMs = 160;
+const maximumMovementTweenDurationMs = 280;
+
+export function isDiagonalMoveDirection(direction: MoveDirection): boolean {
+  return direction === "up-left" || direction === "up-right" || direction === "down-left" || direction === "down-right";
+}
+
+export function getMovementCooldownMs(level: number, direction?: MoveDirection): number {
+  const normalizedLevel = Number.isFinite(level) ? Math.max(1, Math.floor(level)) : 1;
+  const cooldownMs = baseMovementCooldownMs - (normalizedLevel - 1) * movementCooldownReductionPerLevelMs;
+  const cappedCooldownMs = Math.max(minimumMovementCooldownMs, cooldownMs);
+
+  return direction && isDiagonalMoveDirection(direction)
+    ? Math.round(cappedCooldownMs * diagonalMovementCooldownMultiplier)
+    : cappedCooldownMs;
+}
+
+export function getMovementTweenDurationMs(level: number): number {
+  const durationMs = Math.round(getMovementCooldownMs(level) * 0.45);
+
+  return Math.min(maximumMovementTweenDurationMs, Math.max(minimumMovementTweenDurationMs, durationMs));
+}
 
 export type LocalTileType = "grass" | "dirt" | "stone" | "water" | "wall";
 
@@ -71,6 +98,24 @@ export interface WorldPlayer extends Position {
   level: number;
 }
 
+export type MonsterType = "rat" | "wolf" | "troll" | "goblin" | "rotworm" | "orc";
+
+export interface WorldMonster extends Position {
+  id: string;
+  type: MonsterType;
+  name: string;
+  level: number;
+  health: number;
+  maxHealth: number;
+  experienceReward: number;
+  alive: boolean;
+  respawnMs: number;
+  respawnDueAt: number | null;
+  spawnX: number;
+  spawnY: number;
+  spawnZ: number;
+}
+
 export interface WorldJoinRequest {
   characterId: string;
 }
@@ -83,8 +128,20 @@ export interface WorldPlayersEvent {
   players: WorldPlayer[];
 }
 
+export interface WorldMonstersEvent {
+  monsters: WorldMonster[];
+}
+
 export interface PlayerMoveRequest {
   direction: MoveDirection;
+}
+
+export interface AttackMonsterRequest {
+  monsterId: string;
+}
+
+export interface StopCombatRequest {
+  monsterId?: string;
 }
 
 export interface PlayerMovedEvent {
@@ -99,7 +156,82 @@ export interface PlayerLeftEvent {
   characterId: string;
 }
 
+export interface MonsterSpawnedEvent {
+  monster: WorldMonster;
+}
+
+export interface MonsterDamagedEvent {
+  monsterId: string;
+  health: number;
+  maxHealth: number;
+  damage: number;
+}
+
+export interface MonsterDiedEvent {
+  monsterId: string;
+  monster: WorldMonster;
+  experienceReward: number;
+}
+
+export interface MonsterMovedEvent {
+  monster: WorldMonster;
+}
+
+export interface MonsterRespawningEvent {
+  monsterId: string;
+  x: number;
+  y: number;
+  z: number;
+  respawnDueAt: number;
+}
+
+export interface MonsterRespawnedEvent {
+  monster: WorldMonster;
+}
+
+export interface CharacterExperienceUpdatedEvent {
+  characterId: string;
+  experience: number;
+  gainedExperience: number;
+  level: number;
+  health: number;
+  maxHealth: number;
+  mana: number;
+  maxMana: number;
+}
+
+export interface CharacterLevelUpEvent {
+  characterId: string;
+  level: number;
+  health: number;
+  maxHealth: number;
+  mana: number;
+  maxMana: number;
+}
+
+export interface CharacterStatsUpdatedEvent {
+  characterId: string;
+  health: number;
+  maxHealth: number;
+  mana: number;
+  maxMana: number;
+}
+
+export interface CombatStartedEvent {
+  monsterId: string;
+}
+
+export interface CombatStoppedEvent {
+  monsterId?: string;
+  reason: "manual" | "target_dead" | "target_lost" | "out_of_range" | "disconnected";
+}
+
 export interface WorldErrorEvent {
+  message: string;
+  code?: string;
+}
+
+export interface CombatErrorEvent {
   message: string;
   code?: string;
 }
@@ -107,14 +239,29 @@ export interface WorldErrorEvent {
 export interface WorldClientToServerEvents {
   "world:join": (payload: WorldJoinRequest) => void;
   "player:move": (payload: PlayerMoveRequest) => void;
+  "combat:attack": (payload: AttackMonsterRequest) => void;
+  "combat:stop": (payload?: StopCombatRequest) => void;
 }
 
 export interface WorldServerToClientEvents {
   "world:joined": (payload: WorldJoinedEvent) => void;
   "world:players": (payload: WorldPlayersEvent) => void;
+  "world:monsters": (payload: WorldMonstersEvent) => void;
   "player:joined": (payload: PlayerJoinedEvent) => void;
   "player:moved": (payload: PlayerMovedEvent) => void;
   "player:left": (payload: PlayerLeftEvent) => void;
+  "monster:spawned": (payload: MonsterSpawnedEvent) => void;
+  "monster:damaged": (payload: MonsterDamagedEvent) => void;
+  "monster:died": (payload: MonsterDiedEvent) => void;
+  "monster:moved": (payload: MonsterMovedEvent) => void;
+  "monster:respawning": (payload: MonsterRespawningEvent) => void;
+  "monster:respawned": (payload: MonsterRespawnedEvent) => void;
+  "character:experience-updated": (payload: CharacterExperienceUpdatedEvent) => void;
+  "character:level-up": (payload: CharacterLevelUpEvent) => void;
+  "character:stats-updated": (payload: CharacterStatsUpdatedEvent) => void;
+  "combat:started": (payload: CombatStartedEvent) => void;
+  "combat:stopped": (payload: CombatStoppedEvent) => void;
+  "combat:error": (payload: CombatErrorEvent) => void;
   "world:error": (payload: WorldErrorEvent) => void;
 }
 
@@ -122,11 +269,26 @@ export const worldEventNames = {
   worldJoin: "world:join",
   worldJoined: "world:joined",
   worldPlayers: "world:players",
+  worldMonsters: "world:monsters",
   worldError: "world:error",
   playerMove: "player:move",
   playerMoved: "player:moved",
   playerJoined: "player:joined",
-  playerLeft: "player:left"
+  playerLeft: "player:left",
+  combatAttack: "combat:attack",
+  combatStop: "combat:stop",
+  monsterSpawned: "monster:spawned",
+  monsterDamaged: "monster:damaged",
+  monsterDied: "monster:died",
+  monsterMoved: "monster:moved",
+  monsterRespawning: "monster:respawning",
+  monsterRespawned: "monster:respawned",
+  characterExperienceUpdated: "character:experience-updated",
+  characterLevelUp: "character:level-up",
+  characterStatsUpdated: "character:stats-updated",
+  combatStarted: "combat:started",
+  combatStopped: "combat:stopped",
+  combatError: "combat:error"
 } as const;
 
 const localMapWidth = 30;
@@ -285,6 +447,14 @@ export function getNextPosition(position: Position, direction: MoveDirection): P
       return { ...position, x: position.x - 1 };
     case "right":
       return { ...position, x: position.x + 1 };
+    case "up-left":
+      return { ...position, x: position.x - 1, y: position.y - 1 };
+    case "up-right":
+      return { ...position, x: position.x + 1, y: position.y - 1 };
+    case "down-left":
+      return { ...position, x: position.x - 1, y: position.y + 1 };
+    case "down-right":
+      return { ...position, x: position.x + 1, y: position.y + 1 };
     default:
       return position;
   }

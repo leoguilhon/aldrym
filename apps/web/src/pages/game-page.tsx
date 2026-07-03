@@ -1,9 +1,11 @@
 import type {
   CharacterSummary,
+  CombatErrorEvent,
   MoveDirection,
   Position,
   WorldClientToServerEvents,
   WorldErrorEvent,
+  WorldMonster,
   WorldPlayer,
   WorldServerToClientEvents
 } from "@aldrym/shared";
@@ -25,6 +27,8 @@ type WorldConnectionState =
   | "error";
 
 const localMap = createLocalMap();
+const playerScreenTileHalfHeight = 5;
+const playerScreenTileHalfWidth = 7;
 
 function upsertWorldPlayer(players: WorldPlayer[], nextPlayer: WorldPlayer): WorldPlayer[] {
   const existingIndex = players.findIndex((player) => player.characterId === nextPlayer.characterId);
@@ -40,6 +44,57 @@ function upsertWorldPlayer(players: WorldPlayer[], nextPlayer: WorldPlayer): Wor
 
 function removeWorldPlayer(players: WorldPlayer[], characterId: string): WorldPlayer[] {
   return players.filter((player) => player.characterId !== characterId);
+}
+
+function upsertWorldMonster(monsters: WorldMonster[], nextMonster: WorldMonster): WorldMonster[] {
+  const existingIndex = monsters.findIndex((monster) => monster.id === nextMonster.id);
+
+  if (existingIndex === -1) {
+    return [...monsters, nextMonster];
+  }
+
+  return monsters.map((monster) => (monster.id === nextMonster.id ? nextMonster : monster));
+}
+
+function updateWorldMonster(
+  monsters: WorldMonster[],
+  monsterId: string,
+  updates: Partial<Pick<WorldMonster, "alive" | "health" | "maxHealth">>
+): WorldMonster[] {
+  return monsters.map((monster) => (monster.id === monsterId ? { ...monster, ...updates } : monster));
+}
+
+function findNearestVisibleMonster(position: Position | null, monsters: WorldMonster[]): WorldMonster | null {
+  if (!position) {
+    return null;
+  }
+
+  let nearestMonster: WorldMonster | null = null;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  for (const monster of monsters) {
+    if (!monster.alive || monster.z !== position.z) {
+      continue;
+    }
+
+    const deltaX = Math.abs(monster.x - position.x);
+    const deltaY = Math.abs(monster.y - position.y);
+
+    if (deltaX > playerScreenTileHalfWidth || deltaY > playerScreenTileHalfHeight) {
+      continue;
+    }
+
+    const distance = deltaX + deltaY;
+
+    if (distance >= nearestDistance) {
+      continue;
+    }
+
+    nearestMonster = monster;
+    nearestDistance = distance;
+  }
+
+  return nearestMonster;
 }
 
 function getConnectionLabel(state: WorldConnectionState): string {
@@ -117,24 +172,55 @@ function Meter({
 }
 
 function GameViewport({
+  activeCombatMonsterId,
   localCharacterId,
+  monsters,
+  onAttackMonster,
   onMoveIntent,
   players
 }: {
+  activeCombatMonsterId: string | null;
   localCharacterId: string;
+  monsters: WorldMonster[];
+  onAttackMonster: (monsterId: string) => void;
   onMoveIntent: (direction: MoveDirection) => void;
   players: WorldPlayer[];
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<{
     destroy: () => void;
+    setActiveCombatMonsterId: (monsterId: string | null) => void;
+    setMonsters: (nextMonsters: WorldMonster[]) => void;
     setPlayers: (nextPlayers: WorldPlayer[]) => void;
   } | null>(null);
+  const attackMonsterRef = useRef(onAttackMonster);
+  const activeCombatMonsterIdRef = useRef(activeCombatMonsterId);
+  const monstersRef = useRef(monsters);
   const moveIntentRef = useRef(onMoveIntent);
+  const playersRef = useRef(players);
+
+  useEffect(() => {
+    attackMonsterRef.current = onAttackMonster;
+  }, [onAttackMonster]);
+
+  useEffect(() => {
+    activeCombatMonsterIdRef.current = activeCombatMonsterId;
+    gameRef.current?.setActiveCombatMonsterId(activeCombatMonsterId);
+  }, [activeCombatMonsterId]);
+
+  useEffect(() => {
+    monstersRef.current = monsters;
+    gameRef.current?.setMonsters(monsters);
+  }, [monsters]);
 
   useEffect(() => {
     moveIntentRef.current = onMoveIntent;
   }, [onMoveIntent]);
+
+  useEffect(() => {
+    playersRef.current = players;
+    gameRef.current?.setPlayers(players);
+  }, [players]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -154,13 +240,19 @@ function GameViewport({
       }
 
       const game = new AldrymGame({
+        activeCombatMonsterId: activeCombatMonsterIdRef.current,
         localCharacterId,
+        monsters: monstersRef.current,
+        onAttackMonster: (monsterId) => attackMonsterRef.current(monsterId),
         onMoveIntent: (direction) => moveIntentRef.current(direction),
         parent: mountElement,
-        players
+        players: playersRef.current
       });
 
       gameRef.current = game;
+      game.setActiveCombatMonsterId(activeCombatMonsterIdRef.current);
+      game.setPlayers(playersRef.current);
+      game.setMonsters(monstersRef.current);
     }
 
     void mountGame();
@@ -171,10 +263,6 @@ function GameViewport({
       gameRef.current = null;
     };
   }, [localCharacterId]);
-
-  useEffect(() => {
-    gameRef.current?.setPlayers(players);
-  }, [players]);
 
   return (
     <div className="game-viewport">
@@ -191,6 +279,8 @@ export function GamePage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoadingCharacter, setIsLoadingCharacter] = useState(true);
   const [connectionState, setConnectionState] = useState<WorldConnectionState>("connecting");
+  const [activeCombatMonsterId, setActiveCombatMonsterId] = useState<string | null>(null);
+  const [monsters, setMonsters] = useState<WorldMonster[]>([]);
   const [players, setPlayers] = useState<WorldPlayer[]>([]);
   const [worldErrorMessage, setWorldErrorMessage] = useState<string | null>(null);
 
@@ -232,8 +322,10 @@ export function GamePage() {
     };
   }, [characterId, token]);
 
+  const loadedCharacterId = character?.id ?? null;
+
   useEffect(() => {
-    if (!token || !characterId || !character) {
+    if (!token || !characterId || !loadedCharacterId) {
       return;
     }
 
@@ -247,6 +339,8 @@ export function GamePage() {
 
     socketRef.current = socket;
     setConnectionState("connecting");
+    setActiveCombatMonsterId(null);
+    setMonsters([]);
     setPlayers([]);
     setWorldErrorMessage(null);
 
@@ -272,6 +366,10 @@ export function GamePage() {
       setPlayers(payload.players);
     });
 
+    socket.on(worldEventNames.worldMonsters, (payload) => {
+      setMonsters(payload.monsters);
+    });
+
     socket.on(worldEventNames.playerJoined, (payload) => {
       setPlayers((currentPlayers) => upsertWorldPlayer(currentPlayers, payload.player));
     });
@@ -282,6 +380,97 @@ export function GamePage() {
 
     socket.on(worldEventNames.playerLeft, (payload) => {
       setPlayers((currentPlayers) => removeWorldPlayer(currentPlayers, payload.characterId));
+    });
+
+    socket.on(worldEventNames.monsterSpawned, (payload) => {
+      setMonsters((currentMonsters) => upsertWorldMonster(currentMonsters, payload.monster));
+    });
+
+    socket.on(worldEventNames.monsterDamaged, (payload) => {
+      setMonsters((currentMonsters) =>
+        updateWorldMonster(currentMonsters, payload.monsterId, {
+          health: payload.health,
+          maxHealth: payload.maxHealth
+        })
+      );
+    });
+
+    socket.on(worldEventNames.monsterDied, (payload) => {
+      setMonsters((currentMonsters) => upsertWorldMonster(currentMonsters, payload.monster));
+      setActiveCombatMonsterId((currentMonsterId) =>
+        currentMonsterId === payload.monsterId ? null : currentMonsterId
+      );
+    });
+
+    socket.on(worldEventNames.monsterMoved, (payload) => {
+      setMonsters((currentMonsters) => upsertWorldMonster(currentMonsters, payload.monster));
+    });
+
+    socket.on(worldEventNames.monsterRespawned, (payload) => {
+      setMonsters((currentMonsters) => upsertWorldMonster(currentMonsters, payload.monster));
+    });
+
+    socket.on(worldEventNames.characterExperienceUpdated, (payload) => {
+      setCharacter((currentCharacter) =>
+        currentCharacter && currentCharacter.id === payload.characterId
+          ? {
+              ...currentCharacter,
+              experience: payload.experience,
+              level: payload.level,
+              health: payload.health,
+              maxHealth: payload.maxHealth,
+              mana: payload.mana,
+              maxMana: payload.maxMana
+            }
+          : currentCharacter
+      );
+    });
+
+    socket.on(worldEventNames.characterLevelUp, (payload) => {
+      setCharacter((currentCharacter) =>
+        currentCharacter && currentCharacter.id === payload.characterId
+          ? {
+              ...currentCharacter,
+              level: payload.level,
+              health: payload.health,
+              maxHealth: payload.maxHealth,
+              mana: payload.mana,
+              maxMana: payload.maxMana
+            }
+          : currentCharacter
+      );
+      setPlayers((currentPlayers) =>
+        currentPlayers.map((player) =>
+          player.characterId === payload.characterId ? { ...player, level: payload.level } : player
+        )
+      );
+    });
+
+    socket.on(worldEventNames.characterStatsUpdated, (payload) => {
+      setCharacter((currentCharacter) =>
+        currentCharacter && currentCharacter.id === payload.characterId
+          ? {
+              ...currentCharacter,
+              health: payload.health,
+              maxHealth: payload.maxHealth,
+              mana: payload.mana,
+              maxMana: payload.maxMana
+            }
+          : currentCharacter
+      );
+    });
+
+    socket.on(worldEventNames.combatStarted, (payload) => {
+      setActiveCombatMonsterId(payload.monsterId);
+    });
+
+    socket.on(worldEventNames.combatStopped, (payload) => {
+      setActiveCombatMonsterId(null);
+
+    });
+
+    socket.on(worldEventNames.combatError, (payload: CombatErrorEvent) => {
+      console.warn(payload.message);
     });
 
     socket.on(worldEventNames.worldError, (payload: WorldErrorEvent) => {
@@ -299,6 +488,8 @@ export function GamePage() {
 
     socket.on("disconnect", (reason) => {
       setConnectionState("disconnected");
+      setActiveCombatMonsterId(null);
+      setMonsters([]);
       setPlayers([]);
 
       if (reason !== "io client disconnect") {
@@ -311,7 +502,78 @@ export function GamePage() {
       socket.disconnect();
       socketRef.current = null;
     };
-  }, [character, characterId, token]);
+  }, [characterId, loadedCharacterId, token]);
+
+  const localPlayer =
+    character ? players.find((player) => player.characterId === character.id) ?? null : null;
+  const localPosition =
+    character ? localPlayer ?? resolveLocalPlayerSpawn(localMap, character) : null;
+  const aliveMonsters = monsters.filter((monster) => monster.alive);
+  const firstAliveMonster = aliveMonsters[0] ?? null;
+  const isWorldReady = character !== null && connectionState === "joined" && localPlayer !== null;
+
+  const handleMoveIntent = (direction: MoveDirection) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.playerMove, { direction });
+  };
+
+  const handleAttackMonster = (monsterId: string) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.combatAttack, { monsterId });
+  };
+
+  const handleStopCombat = () => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.combatStop);
+  };
+
+  useEffect(() => {
+    if (connectionState !== "joined") {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Space") {
+        return;
+      }
+
+      if (activeCombatMonsterId) {
+        event.preventDefault();
+        handleStopCombat();
+        return;
+      }
+
+      const target = findNearestVisibleMonster(localPosition, monsters);
+
+      if (!target) {
+        return;
+      }
+
+      event.preventDefault();
+      socketRef.current?.emit(worldEventNames.combatAttack, { monsterId: target.id });
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [activeCombatMonsterId, connectionState, localPosition, monsters]);
 
   if (!characterId) {
     return (
@@ -349,22 +611,6 @@ export function GamePage() {
       />
     );
   }
-
-  const localPlayer =
-    players.find((player) => player.characterId === character.id) ?? null;
-  const localPosition =
-    localPlayer ?? resolveLocalPlayerSpawn(localMap, character);
-  const isWorldReady = connectionState === "joined" && localPlayer !== null;
-
-  const handleMoveIntent = (direction: MoveDirection) => {
-    const socket = socketRef.current;
-
-    if (!socket || !socket.connected || connectionState !== "joined") {
-      return;
-    }
-
-    socket.emit(worldEventNames.playerMove, { direction });
-  };
 
   return (
     <section className="page-stack">
@@ -404,7 +650,10 @@ export function GamePage() {
           <div className="game-stage">
             {isWorldReady ? (
               <GameViewport
+                activeCombatMonsterId={activeCombatMonsterId}
                 localCharacterId={character.id}
+                monsters={monsters}
+                onAttackMonster={handleAttackMonster}
                 onMoveIntent={handleMoveIntent}
                 players={players}
               />
@@ -418,15 +667,6 @@ export function GamePage() {
                 ) : null}
               </div>
             )}
-
-            <div className="game-stage__overlay game-stage__overlay--top">
-              <span>Level {character.level}</span>
-              <span>{getConnectionLabel(connectionState)}</span>
-            </div>
-
-            <div className="game-stage__overlay game-stage__overlay--bottom">
-              <span>Move with WASD or arrow keys.</span>
-            </div>
           </div>
         </section>
 
@@ -451,6 +691,22 @@ export function GamePage() {
               <div className="metric">
                 <dt>Online Players</dt>
                 <dd>{players.length}</dd>
+              </div>
+              <div className="metric">
+                <dt>Monsters</dt>
+                <dd>{aliveMonsters.length}</dd>
+              </div>
+              <div className="metric">
+                <dt>Nearest Monster</dt>
+                <dd>
+                  {firstAliveMonster ? (
+                    <>
+                      {firstAliveMonster.x}, {firstAliveMonster.y}, {firstAliveMonster.z}
+                    </>
+                  ) : (
+                    "None"
+                  )}
+                </dd>
               </div>
               <div className="metric">
                 <dt>Experience</dt>
@@ -478,8 +734,8 @@ export function GamePage() {
           <section className="panel game-sidebar">
             <p className="panel-kicker">World Notes</p>
             <p className="panel-copy">
-              Joined players appear as generated figures with names above them. Blocked
-              movement is rejected by the server and does not move the local player.
+              Visible monsters can be targeted from range. Combat damage only lands from
+              adjacent tiles, and progression is resolved by the server.
             </p>
           </section>
         </aside>

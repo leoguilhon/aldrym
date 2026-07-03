@@ -6,11 +6,11 @@
 2. Login and character creation
 3. Offline map rendering and local movement
 4. Multiplayer movement and world join
-5. Simple combat
+5. Simple PvE monsters and combat
 6. Loot and inventory
 7. NPC and quests
 
 ## Current Focus
 
-- The first multiplayer step is now in place: authenticated world join, online player presence, and server-authoritative tile movement
-- Combat, monsters, loot, inventory, quests, and broader world scalability remain deferred to later phases
+- The first PvE step is now in place: hardcoded local-map monsters, adjacent melee attacks, server-authoritative player damage, monster pursuit, collision, corpses, experience rewards, level-up persistence, respawn warnings, and timed respawn
+- Loot, inventory, equipment, skills, spells, monster damage, player death, PvP, NPCs, quests, and broader world scalability remain deferred to later phases

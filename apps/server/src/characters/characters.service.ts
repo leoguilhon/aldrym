@@ -111,4 +111,96 @@ export class CharactersService {
       }
     });
   }
+
+  async addExperienceForUserCharacter(
+    userId: string,
+    characterId: string,
+    gainedExperience: number
+  ): Promise<{ character: CharacterSummary; leveledUp: boolean }> {
+    const character = await this.prisma.character.findFirst({
+      where: {
+        id: characterId,
+        userId
+      }
+    });
+
+    if (!character) {
+      throw new NotFoundException("Character not found");
+    }
+
+    let nextLevel = character.level;
+    const nextExperience = character.experience + gainedExperience;
+
+    // Temporary MVP balancing: these original thresholds are intentionally simple
+    // until combat pacing is tuned around real creatures and progression.
+    while (nextExperience >= this.getExperienceRequiredForLevel(nextLevel)) {
+      nextLevel += 1;
+    }
+
+    const leveledUp = nextLevel > character.level;
+    const levelGain = nextLevel - character.level;
+    const nextMaxHealth = character.maxHealth + levelGain * 10;
+    const nextMaxMana = character.maxMana + levelGain * 5;
+
+    const updatedCharacter = await this.prisma.character.update({
+      where: {
+        id: character.id
+      },
+      data: {
+        experience: nextExperience,
+        level: nextLevel,
+        maxHealth: nextMaxHealth,
+        maxMana: nextMaxMana,
+        health: leveledUp ? nextMaxHealth : character.health,
+        mana: leveledUp ? nextMaxMana : character.mana
+      }
+    });
+
+    return {
+      character: toCharacterSummary(updatedCharacter),
+      leveledUp
+    };
+  }
+
+  async applyDamageToUserCharacter(
+    userId: string,
+    characterId: string,
+    damage: number
+  ): Promise<CharacterSummary> {
+    const character = await this.prisma.character.findFirst({
+      where: {
+        id: characterId,
+        userId
+      }
+    });
+
+    if (!character) {
+      throw new NotFoundException("Character not found");
+    }
+
+    // Temporary MVP rule: monsters can pressure the player, but player death is
+    // intentionally deferred, so health cannot drop below 1 yet.
+    const updatedCharacter = await this.prisma.character.update({
+      where: {
+        id: character.id
+      },
+      data: {
+        health: Math.max(1, character.health - damage)
+      }
+    });
+
+    return toCharacterSummary(updatedCharacter);
+  }
+
+  private getExperienceRequiredForLevel(level: number): number {
+    if (level === 1) {
+      return 100;
+    }
+
+    if (level === 2) {
+      return 250;
+    }
+
+    return level * level * 100;
+  }
 }

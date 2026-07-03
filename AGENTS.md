@@ -7,8 +7,8 @@ Aldrym is an original 2D browser-based old-school MMORPG. The intended feel is s
 ## Originality Rules
 
 - The game is heavily inspired by classic Tibia-like MMORPG gameplay loops and pacing.
-- All concrete creative content must be original.
-- Do not copy or reuse Tibia, CipSoft, OpenTibia, or third-party assets, names, texts, maps, quests, formulas, UI, data files, or protected material.
+- Do not copy or reuse Tibia, CipSoft, OpenTibia, or third-party assets, texts, maps, quests, formulas, UI, data files, or protected material.
+- Generic fantasy terms and creature names may be used when they are common genre vocabulary.
 
 ## Engineering Rules
 
@@ -37,3 +37,18 @@ Aldrym is an original 2D browser-based old-school MMORPG. The intended feel is s
 - Write commit messages in English using the format `type(scope): short imperative summary`.
 - Prefer small, focused commits that cover one logical change at a time.
 - Use clear types such as `chore`, `docs`, `feat`, `fix`, `refactor`, and `test`.
+
+
+## Image Generation Rule
+
+Whenever generating visual assets for the project, always follow the art direction defined in `ART_DIRECTION.md` and `PROMPT_TEMPLATES.md`.
+
+All generated assets must preserve:
+- classic top-down MMORPG perspective
+- old-school pixel art style
+- strong readability at small scale
+- dense handcrafted environment design
+- original fantasy content
+- a visual feel strongly inspired by classic Tibia-style gameplay
+
+Do not generate assets in styles that are realistic, painterly, 3D, glossy, overly cartoonish, or inconsistent with the established visual direction.

@@ -1,4 +1,5 @@
-import type { MoveDirection, WorldPlayer } from "@aldrym/shared";
+import { getMovementCooldownMs, getMovementTweenDurationMs } from "@aldrym/shared";
+import type { MoveDirection, WorldMonster, WorldPlayer } from "@aldrym/shared";
 import Phaser from "phaser";
 
 import {
@@ -9,7 +10,11 @@ import {
 } from "../map/localMap";
 
 interface MovementKeys {
+  downLeft?: Phaser.Input.Keyboard.Key;
+  downRight?: Phaser.Input.Keyboard.Key;
   up?: Phaser.Input.Keyboard.Key;
+  upLeft?: Phaser.Input.Keyboard.Key;
+  upRight?: Phaser.Input.Keyboard.Key;
   down?: Phaser.Input.Keyboard.Key;
   left?: Phaser.Input.Keyboard.Key;
   right?: Phaser.Input.Keyboard.Key;
@@ -20,33 +25,62 @@ interface PlayerView {
   label: Phaser.GameObjects.Text;
 }
 
+interface MonsterView {
+  alive: boolean;
+  body: Phaser.GameObjects.Ellipse;
+  container: Phaser.GameObjects.Container;
+  detail: Phaser.GameObjects.Rectangle;
+  healthBack: Phaser.GameObjects.Rectangle;
+  healthBar: Phaser.GameObjects.Rectangle;
+  hitArea: Phaser.GameObjects.Zone;
+  label: Phaser.GameObjects.Text;
+  shadow: Phaser.GameObjects.Ellipse;
+  tileMarker: Phaser.GameObjects.Rectangle;
+}
+
+interface RespawnWarningView {
+  container: Phaser.GameObjects.Container;
+}
+
 export interface MainSceneOptions {
+  activeCombatMonsterId?: string | null;
   initialPlayers: WorldPlayer[];
   localCharacterId: string;
   map: LocalMapData;
+  monsters: WorldMonster[];
+  onAttackMonster?: (monsterId: string) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
 }
 
 const CAMERA_ZOOM = 2;
-const MOVE_COOLDOWN_MS = 140;
-const MOVE_TWEEN_DURATION_MS = 100;
+const MONSTER_HEALTH_BAR_WIDTH = 24;
+const RESPAWN_WARNING_MS = 3000;
 
 export class MainScene extends Phaser.Scene {
+  private activeCombatMonsterId: string | null;
   private readonly localCharacterId: string;
   private readonly map: LocalMapData;
+  private readonly onAttackMonster?: (monsterId: string) => void;
   private readonly onMoveIntent?: (direction: MoveDirection) => void;
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private movementKeys?: MovementKeys;
   private nextMoveAt = 0;
   private isSceneReady = false;
+  private pendingMonsters: WorldMonster[];
   private pendingPlayers: WorldPlayer[];
+  private readonly monsterViews = new Map<string, MonsterView>();
   private readonly playerViews = new Map<string, PlayerView>();
+  private readonly respawnWarningTimers = new Map<string, Phaser.Time.TimerEvent>();
+  private readonly respawnWarningViews = new Map<string, RespawnWarningView>();
 
   constructor(options: MainSceneOptions) {
     super({ key: "main-scene" });
+    this.activeCombatMonsterId = options.activeCombatMonsterId ?? null;
     this.localCharacterId = options.localCharacterId;
     this.map = options.map;
+    this.onAttackMonster = options.onAttackMonster;
     this.onMoveIntent = options.onMoveIntent;
+    this.pendingMonsters = options.monsters;
     this.pendingPlayers = options.initialPlayers;
   }
 
@@ -55,6 +89,7 @@ export class MainScene extends Phaser.Scene {
     this.createControls();
     this.configureCamera();
     this.isSceneReady = true;
+    this.syncMonsters(this.pendingMonsters);
     this.syncPlayers(this.pendingPlayers);
   }
 
@@ -69,8 +104,28 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
-    this.nextMoveAt = time + MOVE_COOLDOWN_MS;
+    this.nextMoveAt = time + getMovementCooldownMs(this.getLocalPlayerLevel(), direction);
     this.onMoveIntent(direction);
+  }
+
+  setMonsters(monsters: WorldMonster[]): void {
+    this.pendingMonsters = monsters.map((monster) => ({ ...monster }));
+
+    if (this.isSceneReady) {
+      this.syncMonsters(this.pendingMonsters);
+    }
+  }
+
+  setActiveCombatMonsterId(monsterId: string | null): void {
+    if (this.activeCombatMonsterId === monsterId) {
+      return;
+    }
+
+    this.activeCombatMonsterId = monsterId;
+
+    if (this.isSceneReady) {
+      this.syncMonsterTargetMarkers();
+    }
   }
 
   setPlayers(players: WorldPlayer[]): void {
@@ -140,9 +195,14 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
+    this.input.mouse?.disableContextMenu();
     this.cursors = keyboard.createCursorKeys();
     this.movementKeys = keyboard.addKeys({
+      downLeft: Phaser.Input.Keyboard.KeyCodes.Z,
+      downRight: Phaser.Input.Keyboard.KeyCodes.C,
       up: Phaser.Input.Keyboard.KeyCodes.W,
+      upLeft: Phaser.Input.Keyboard.KeyCodes.Q,
+      upRight: Phaser.Input.Keyboard.KeyCodes.E,
       down: Phaser.Input.Keyboard.KeyCodes.S,
       left: Phaser.Input.Keyboard.KeyCodes.A,
       right: Phaser.Input.Keyboard.KeyCodes.D
@@ -161,6 +221,22 @@ export class MainScene extends Phaser.Scene {
   }
 
   private getRequestedDirection(): MoveDirection | null {
+    if (this.isKeyDown(this.movementKeys?.upLeft)) {
+      return "up-left";
+    }
+
+    if (this.isKeyDown(this.movementKeys?.upRight)) {
+      return "up-right";
+    }
+
+    if (this.isKeyDown(this.movementKeys?.downLeft)) {
+      return "down-left";
+    }
+
+    if (this.isKeyDown(this.movementKeys?.downRight)) {
+      return "down-right";
+    }
+
     if (this.isKeyDown(this.cursors?.up, this.movementKeys?.up)) {
       return "up";
     }
@@ -205,6 +281,28 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  private syncMonsters(monsters: WorldMonster[]): void {
+    const knownMonsterIds = new Set(monsters.map((monster) => monster.id));
+
+    for (const monster of monsters) {
+      this.upsertMonsterView(monster);
+      this.syncRespawnWarning(monster);
+    }
+
+    for (const [monsterId, view] of this.monsterViews.entries()) {
+      if (!knownMonsterIds.has(monsterId)) {
+        view.container.destroy(true);
+        this.monsterViews.delete(monsterId);
+      }
+    }
+
+    for (const monsterId of this.respawnWarningViews.keys()) {
+      if (!knownMonsterIds.has(monsterId)) {
+        this.clearRespawnWarning(monsterId);
+      }
+    }
+  }
+
   private upsertPlayerView(player: WorldPlayer): void {
     const existingView = this.playerViews.get(player.characterId);
     const { x, y } = getTileCenter(this.map, player);
@@ -220,7 +318,7 @@ export class MainScene extends Phaser.Scene {
       targets: existingView.container,
       x,
       y,
-      duration: MOVE_TWEEN_DURATION_MS,
+      duration: getMovementTweenDurationMs(player.level),
       ease: "Quad.easeOut"
     });
   }
@@ -252,4 +350,272 @@ export class MainScene extends Phaser.Scene {
       label
     };
   }
+
+  private upsertMonsterView(monster: WorldMonster): void {
+    const existingView = this.monsterViews.get(monster.id);
+    const { x, y } = getTileCenter(this.map, monster);
+
+    if (!existingView) {
+      this.monsterViews.set(monster.id, this.createMonsterView(monster, x, y));
+      return;
+    }
+
+    if (!existingView.alive && monster.alive) {
+      this.tweens.killTweensOf(existingView.container);
+      existingView.container.setPosition(x, y);
+      this.updateMonsterView(existingView, monster);
+      return;
+    }
+
+    if (existingView.container.x !== x || existingView.container.y !== y) {
+      this.tweens.killTweensOf(existingView.container);
+      this.tweens.add({
+        targets: existingView.container,
+        x,
+        y,
+        duration: getMovementTweenDurationMs(monster.level),
+        ease: "Quad.easeOut"
+      });
+    }
+
+    this.updateMonsterView(existingView, monster);
+  }
+
+  private getLocalPlayerLevel(): number {
+    return this.pendingPlayers.find((player) => player.characterId === this.localCharacterId)?.level ?? 1;
+  }
+
+  private createMonsterView(monster: WorldMonster, x: number, y: number): MonsterView {
+    const label = this.add.text(0, -24, this.getMonsterLabel(monster), {
+      color: "#f2e5c8",
+      fontFamily: "Georgia",
+      fontSize: "10px",
+      stroke: "#120c08",
+      strokeThickness: 3
+    });
+    const shadow = this.add.ellipse(0, 8, 18, 9, 0x000000, 0.24);
+    const tileMarker = this.add.rectangle(0, 0, this.map.tileSize - 4, this.map.tileSize - 4, 0x000000, 0);
+    const body = this.add.ellipse(0, 0, 24, 18, this.getMonsterColor(monster.type), 1);
+    const detail = this.add.rectangle(0, -1, 14, 6, 0xf0d18c, 0.58);
+    const healthBack = this.add.rectangle(-MONSTER_HEALTH_BAR_WIDTH / 2, -15, MONSTER_HEALTH_BAR_WIDTH, 4, 0x23140d, 1);
+    const healthBar = this.add.rectangle(-MONSTER_HEALTH_BAR_WIDTH / 2, -15, MONSTER_HEALTH_BAR_WIDTH, 4, 0x9f3d2c, 1);
+    const hitArea = this.add.zone(0, 0, this.map.tileSize, this.map.tileSize);
+
+    label.setOrigin(0.5, 1);
+    this.updateMonsterTileMarker(tileMarker, monster);
+    body.setStrokeStyle(2, 0x2e1a10, 1);
+    detail.setStrokeStyle(1, 0x3e2a19, 0.7);
+    healthBack.setOrigin(0, 0.5);
+    healthBar.setOrigin(0, 0.5);
+    hitArea.setOrigin(0.5);
+    hitArea.setInteractive();
+
+    const container = this.add.container(x, y, [hitArea, tileMarker, label, healthBack, healthBar, shadow, body, detail]);
+    container.setDepth(40);
+    hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.button === 2) {
+        this.onAttackMonster?.(monster.id);
+      }
+    });
+
+    const view = {
+      alive: monster.alive,
+      body,
+      container,
+      detail,
+      healthBack,
+      healthBar,
+      hitArea,
+      label,
+      shadow,
+      tileMarker
+    };
+
+    this.updateMonsterView(view, monster);
+    return view;
+  }
+
+  private updateMonsterView(view: MonsterView, monster: WorldMonster): void {
+    if (!monster.alive) {
+      this.updateMonsterCorpseView(view, monster);
+      return;
+    }
+
+    this.updateMonsterAliveView(view, monster);
+  }
+
+  private updateMonsterAliveView(view: MonsterView, monster: WorldMonster): void {
+    const healthRatio = monster.maxHealth > 0 ? Phaser.Math.Clamp(monster.health / monster.maxHealth, 0, 1) : 0;
+
+    view.alive = true;
+    view.container.setDepth(40);
+    view.label.setPosition(0, -24);
+    view.label.setText(this.getMonsterLabel(monster));
+    view.healthBack.setVisible(true);
+    view.healthBar.setVisible(true);
+    view.body.setPosition(0, 0);
+    view.body.setDisplaySize(24, 18);
+    view.body.setFillStyle(this.getMonsterColor(monster.type), 1);
+    view.body.setStrokeStyle(2, 0x2e1a10, 1);
+    view.detail.setPosition(0, -1);
+    view.detail.setDisplaySize(14, 6);
+    view.detail.setFillStyle(0xf0d18c, 0.58);
+    view.detail.setStrokeStyle(1, 0x3e2a19, 0.7);
+    view.shadow.setDisplaySize(18, 9);
+    view.hitArea.setInteractive();
+    this.updateMonsterHealthBar(view.healthBar, healthRatio);
+    this.updateMonsterTileMarker(view.tileMarker, monster);
+  }
+
+  private updateMonsterCorpseView(view: MonsterView, monster: WorldMonster): void {
+    view.alive = false;
+    view.container.setDepth(18);
+    view.label.setPosition(0, -18);
+    view.label.setText(`${monster.name} corpse`);
+    view.healthBack.setVisible(false);
+    view.healthBar.setVisible(false);
+    view.body.setPosition(0, 4);
+    view.body.setDisplaySize(24, 12);
+    view.body.setFillStyle(0x4d3b2d, 0.95);
+    view.body.setStrokeStyle(1, 0x2e1a10, 0.8);
+    view.detail.setPosition(2, 2);
+    view.detail.setDisplaySize(12, 4);
+    view.detail.setFillStyle(0x8a6b45, 0.55);
+    view.detail.setStrokeStyle(1, 0x2e1a10, 0.35);
+    view.shadow.setDisplaySize(20, 9);
+    view.hitArea.disableInteractive();
+    view.tileMarker.setStrokeStyle(1, 0x7d5b3d, 0.55);
+  }
+
+  private updateMonsterHealthBar(healthBar: Phaser.GameObjects.Rectangle, healthRatio: number): void {
+    const filledWidth = Math.ceil(MONSTER_HEALTH_BAR_WIDTH * healthRatio);
+
+    healthBar.setDisplaySize(Math.max(0, filledWidth), 4);
+  }
+
+  private syncMonsterTargetMarkers(): void {
+    for (const [monsterId, view] of this.monsterViews.entries()) {
+      const monster = this.pendingMonsters.find((pendingMonster) => pendingMonster.id === monsterId);
+
+      if (monster?.alive) {
+        this.updateMonsterTileMarker(view.tileMarker, monster);
+      }
+    }
+  }
+
+  private updateMonsterTileMarker(tileMarker: Phaser.GameObjects.Rectangle, monster: WorldMonster): void {
+    if (monster.id === this.activeCombatMonsterId) {
+      tileMarker.setStrokeStyle(2, 0xc4312b, 1);
+      return;
+    }
+
+    tileMarker.setStrokeStyle(2, 0xf0d18c, 0.9);
+  }
+
+  private syncRespawnWarning(monster: WorldMonster): void {
+    if (monster.alive) {
+      this.clearRespawnWarning(monster.id);
+      return;
+    }
+
+    if (!monster.respawnDueAt || this.respawnWarningViews.has(monster.id) || this.respawnWarningTimers.has(monster.id)) {
+      return;
+    }
+
+    const delay = Math.max(0, monster.respawnDueAt - Date.now() - RESPAWN_WARNING_MS);
+
+    if (delay === 0) {
+      this.createRespawnWarning(monster);
+      return;
+    }
+
+    const timer = this.time.delayedCall(delay, () => {
+      this.respawnWarningTimers.delete(monster.id);
+      this.createRespawnWarning(monster);
+    });
+
+    this.respawnWarningTimers.set(monster.id, timer);
+  }
+
+  private createRespawnWarning(monster: WorldMonster): void {
+    if (this.respawnWarningViews.has(monster.id) || monster.alive) {
+      return;
+    }
+
+    const { x, y } = getTileCenter(this.map, {
+      x: monster.spawnX,
+      y: monster.spawnY
+    });
+    const tileMarker = this.add.rectangle(0, 0, this.map.tileSize - 5, this.map.tileSize - 5, 0x2f2118, 0.18);
+    const innerPulse = this.add.ellipse(0, 0, 18, 18, 0xf0d18c, 0.22);
+    const spark = this.add.rectangle(0, 0, 5, 5, 0xf0d18c, 0.7);
+
+    tileMarker.setStrokeStyle(2, 0xf0d18c, 0.85);
+    spark.setAngle(45);
+
+    const container = this.add.container(x, y, [tileMarker, innerPulse, spark]);
+    container.setDepth(12);
+
+    this.tweens.add({
+      targets: container,
+      alpha: 0.35,
+      duration: 420,
+      ease: "Sine.easeInOut",
+      repeat: -1,
+      yoyo: true
+    });
+    this.tweens.add({
+      targets: innerPulse,
+      scale: 1.45,
+      duration: 520,
+      ease: "Sine.easeOut",
+      repeat: -1,
+      yoyo: true
+    });
+
+    this.respawnWarningViews.set(monster.id, {
+      container
+    });
+  }
+
+  private clearRespawnWarning(monsterId: string): void {
+    const timer = this.respawnWarningTimers.get(monsterId);
+
+    if (timer) {
+      timer.remove(false);
+      this.respawnWarningTimers.delete(monsterId);
+    }
+
+    const warning = this.respawnWarningViews.get(monsterId);
+
+    if (warning) {
+      this.tweens.killTweensOf(warning.container);
+      warning.container.destroy(true);
+      this.respawnWarningViews.delete(monsterId);
+    }
+  }
+
+  private getMonsterLabel(monster: WorldMonster): string {
+    return `${monster.name} ${monster.health}/${monster.maxHealth}`;
+  }
+
+  private getMonsterColor(type: WorldMonster["type"]): number {
+    switch (type) {
+      case "rat":
+        return 0x7c7568;
+      case "wolf":
+        return 0x8f8a7e;
+      case "troll":
+        return 0x4f7552;
+      case "goblin":
+        return 0x6f8b3d;
+      case "rotworm":
+        return 0x8b4f38;
+      case "orc":
+        return 0x53633d;
+      default:
+        return 0x7c7568;
+    }
+  }
+
 }

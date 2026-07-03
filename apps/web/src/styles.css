@@ -589,36 +589,6 @@ p {
   image-rendering: pixelated;
 }
 
-.game-stage__overlay {
-  position: absolute;
-  z-index: 2;
-  display: flex;
-  gap: 0.6rem;
-  padding: 0.75rem;
-  pointer-events: none;
-}
-
-.game-stage__overlay span {
-  border: 1px solid rgba(213, 179, 113, 0.26);
-  border-radius: 999px;
-  padding: 0.45rem 0.75rem;
-  background: rgba(18, 12, 8, 0.75);
-  color: #f3e4c3;
-  font-size: 0.78rem;
-  font-weight: 700;
-  letter-spacing: 0.05em;
-}
-
-.game-stage__overlay--top {
-  top: 0.9rem;
-  left: 0.9rem;
-}
-
-.game-stage__overlay--bottom {
-  right: 0.9rem;
-  bottom: 0.9rem;
-}
-
 .game-sidebar {
   display: flex;
   flex-direction: column;
@@ -750,18 +720,6 @@ p {
 
   .game-stage {
     padding: 0.7rem;
-  }
-
-  .game-stage__overlay {
-    position: static;
-    flex-direction: column;
-    padding: 0;
-    margin-top: 0.85rem;
-  }
-
-  .game-stage__overlay span {
-    width: 100%;
-    text-align: center;
   }
 
   .game-viewport__mount {
