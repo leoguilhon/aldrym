@@ -390,7 +390,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     if (!this.isInDirectContact(activePlayer.position, corpse)) {
-      this.emitCorpseError(client, "You need to stand beside the corpse.", "corpse_too_far");
+      this.emitCorpseError(client, "You need to stand on the corpse tile or on any adjacent tile.", "corpse_too_far");
       return;
     }
 
@@ -440,7 +440,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     if (!this.isInDirectContact(activePlayer.position, corpse)) {
-      this.emitCorpseError(client, "You need to stand beside the corpse.", "corpse_too_far");
+      this.emitCorpseError(client, "You need to stand on the corpse tile or on any adjacent tile.", "corpse_too_far");
       return;
     }
 
@@ -864,12 +864,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   }
 
   private isAdjacent(attacker: Position, target: Position): boolean {
-    return attacker.z === target.z && Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y) === 1;
+    return attacker.z === target.z && Math.max(Math.abs(attacker.x - target.x), Math.abs(attacker.y - target.y)) === 1;
   }
 
   private isInDirectContact(player: Position, target: Position): boolean {
-    const distance = this.getTileDistance(player, target);
-    return distance !== null && distance <= 1;
+    return player.z === target.z && Math.max(Math.abs(player.x - target.x), Math.abs(player.y - target.y)) <= 1;
   }
 
   private isWithinPursuitRange(attacker: Position, target: Position): boolean {

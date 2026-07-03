@@ -141,7 +141,7 @@ This document defines the multiplayer world events used by the browser client an
 - Socket connections are authenticated with the same JWT token used by the REST API.
 - The server keeps live world positions, monster state, and corpse state in memory.
 - Character position is persisted only when a joined socket disconnects, not on every movement step.
-- Corpse interaction requires direct contact: same tile or cardinally adjacent tile. Diagonal interaction is not accepted.
+- Corpse interaction requires direct contact: same tile or any adjacent tile, including diagonals.
 - Monster loot is rolled by the server into corpse contents. Items do not drop directly on the ground.
 - Corpse contents decay in memory. Normal corpses last 120 seconds; empty corpses decay after 15 seconds.
 - Character inventory is persisted to PostgreSQL. Stackable items merge into an existing character item row with the same `itemKey`; non-stackable items create separate rows.

@@ -45,5 +45,5 @@
 - Defeated monsters are kept in memory as corpses, show a client respawn warning shortly before returning, respawn after their configured delay at their original spawn tile, and are not persisted to PostgreSQL
 - Character experience and level-up stat changes are persisted to PostgreSQL when a monster defeat grants progression
 - Defeated monsters roll original server-side loot tables into in-memory corpse contents
-- Corpse interaction is intent-based: the client sends only corpse ids, corpse item ids, and requested quantities, and the server validates same-tile or cardinal-adjacent contact before writing inventory
+- Corpse interaction is intent-based: the client sends only corpse ids, corpse item ids, and requested quantities, and the server validates same-tile or adjacent contact, including diagonals, before writing inventory
 - Character inventory is persisted in PostgreSQL through `CharacterItem`; stackable items merge by character and item key, while non-stackable items create separate rows. The current MVP enforces a 10-row slot limit before creating a new inventory row.

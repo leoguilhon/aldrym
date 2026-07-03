@@ -39,8 +39,13 @@ interface MonsterView {
 }
 
 interface CorpseView {
+  body: Phaser.GameObjects.Ellipse;
+  cloth: Phaser.GameObjects.Rectangle;
   container: Phaser.GameObjects.Container;
+  highlight: Phaser.GameObjects.Rectangle;
+  hitArea: Phaser.GameObjects.Zone;
   label: Phaser.GameObjects.Text;
+  tooltip: Phaser.GameObjects.Text;
 }
 
 interface RespawnWarningView {
@@ -82,6 +87,7 @@ export class MainScene extends Phaser.Scene {
   private readonly playerViews = new Map<string, PlayerView>();
   private readonly respawnWarningTimers = new Map<string, Phaser.Time.TimerEvent>();
   private readonly respawnWarningViews = new Map<string, RespawnWarningView>();
+  private hoveredCorpseId: string | null = null;
 
   constructor(options: MainSceneOptions) {
     super({ key: "main-scene" });
@@ -104,6 +110,8 @@ export class MainScene extends Phaser.Scene {
     this.syncCorpses(this.pendingCorpses);
     this.syncMonsters(this.pendingMonsters);
     this.syncPlayers(this.pendingPlayers);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.resetCorpseCursor());
+    this.events.once(Phaser.Scenes.Events.DESTROY, () => this.resetCorpseCursor());
   }
 
   update(time: number): void {
@@ -333,7 +341,7 @@ export class MainScene extends Phaser.Scene {
 
     for (const [corpseId, view] of this.corpseViews.entries()) {
       if (!knownCorpseIds.has(corpseId)) {
-        view.container.destroy(true);
+        this.destroyCorpseView(corpseId, view);
         this.corpseViews.delete(corpseId);
       }
     }
@@ -398,9 +406,12 @@ export class MainScene extends Phaser.Scene {
 
     existingView.container.setPosition(x, y);
     existingView.label.setText(this.getCorpseLabel(corpse));
+    existingView.body.setFillStyle(corpse.isEmpty ? 0x4b3a2f : 0x6c4c34, 1);
+    existingView.cloth.setFillStyle(corpse.isEmpty ? 0x6f5b46 : 0x9b7143, 0.65);
   }
 
   private createCorpseView(corpse: Corpse, x: number, y: number): CorpseView {
+    const highlight = this.add.rectangle(0, 0, this.map.tileSize - 5, this.map.tileSize - 5, 0x6c4c34, 0.08);
     const label = this.add.text(0, -17, this.getCorpseLabel(corpse), {
       color: "#f7df9f",
       fontFamily: "Georgia",
@@ -412,25 +423,96 @@ export class MainScene extends Phaser.Scene {
     const shadow = this.add.ellipse(0, 8, 22, 8, 0x000000, 0.24);
     const body = this.add.ellipse(0, 3, 22, 12, corpse.isEmpty ? 0x4b3a2f : 0x6c4c34, 1);
     const cloth = this.add.rectangle(2, 1, 12, 4, corpse.isEmpty ? 0x6f5b46 : 0x9b7143, 0.65);
+    const tooltip = this.add.text(0, -31, "Open corpse", {
+      backgroundColor: "#2b1a10",
+      color: "#f7df9f",
+      fontFamily: "Georgia",
+      fontSize: "8px",
+      padding: { x: 3, y: 2 },
+      stroke: "#120c08",
+      strokeThickness: 2
+    });
 
+    highlight.setStrokeStyle(1, 0xc9a25d, 0.62);
     label.setOrigin(0.5, 1);
     body.setStrokeStyle(1, 0x2e1a10, 1);
     cloth.setAngle(-12);
+    tooltip.setOrigin(0.5, 1);
+    tooltip.setVisible(false);
     hitArea.setOrigin(0.5);
     hitArea.setInteractive();
+    hitArea.on("pointerover", () => {
+      this.setCorpseHoverState(corpse.id, true);
+    });
+    hitArea.on("pointerout", () => {
+      this.setCorpseHoverState(corpse.id, false);
+    });
     hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (pointer.button === 2) {
         this.onOpenCorpse?.(corpse.id);
       }
     });
 
-    const container = this.add.container(x, y, [hitArea, shadow, body, cloth, label]);
+    const container = this.add.container(x, y, [highlight, hitArea, shadow, body, cloth, label, tooltip]);
     container.setDepth(14);
 
     return {
+      body,
+      cloth,
       container,
-      label
+      highlight,
+      hitArea,
+      label,
+      tooltip
     };
+  }
+
+  private destroyCorpseView(corpseId: string, view: CorpseView): void {
+    if (this.hoveredCorpseId === corpseId) {
+      this.hoveredCorpseId = null;
+      this.resetCorpseCursor();
+    }
+
+    view.hitArea.removeAllListeners();
+    view.container.destroy(true);
+  }
+
+  private setCorpseHoverState(corpseId: string, isHovered: boolean): void {
+    const view = this.corpseViews.get(corpseId);
+
+    if (!view) {
+      return;
+    }
+
+    if (isHovered) {
+      this.hoveredCorpseId = corpseId;
+      view.highlight.setFillStyle(0xc9a25d, 0.18);
+      view.highlight.setStrokeStyle(2, 0xf0d18c, 1);
+      view.tooltip.setVisible(true);
+      this.setCorpseCursor("pointer");
+      return;
+    }
+
+    if (this.hoveredCorpseId === corpseId) {
+      this.hoveredCorpseId = null;
+      this.resetCorpseCursor();
+    }
+
+    view.highlight.setFillStyle(0x6c4c34, 0.08);
+    view.highlight.setStrokeStyle(1, 0xc9a25d, 0.62);
+    view.tooltip.setVisible(false);
+  }
+
+  private setCorpseCursor(cursor: string): void {
+    const canvas = this.game.canvas;
+
+    if (canvas) {
+      canvas.style.cursor = cursor;
+    }
+  }
+
+  private resetCorpseCursor(): void {
+    this.setCorpseCursor("");
   }
 
   private upsertMonsterView(monster: WorldMonster): void {

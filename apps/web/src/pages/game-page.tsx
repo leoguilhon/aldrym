@@ -87,6 +87,25 @@ function removeCorpse(corpses: Corpse[], corpseId: string): Corpse[] {
   return corpses.filter((corpse) => corpse.id !== corpseId);
 }
 
+function getCorpseErrorMessage(payload: CorpseErrorEvent): string {
+  if (payload.code === "corpse_too_far") {
+    return "Stand on the corpse tile or on any adjacent tile, including diagonals.";
+  }
+
+  return payload.message;
+}
+
+function isInCorpseInteractionRange(position: Position, corpse: Corpse): boolean {
+  if (position.z !== corpse.z) {
+    return false;
+  }
+
+  const deltaX = Math.abs(position.x - corpse.x);
+  const deltaY = Math.abs(position.y - corpse.y);
+
+  return Math.max(deltaX, deltaY) <= 1;
+}
+
 function findNearestVisibleMonster(position: Position | null, monsters: WorldMonster[]): WorldMonster | null {
   if (!position) {
     return null;
@@ -566,7 +585,7 @@ export function GamePage() {
     });
 
     socket.on(worldEventNames.corpseError, (payload: CorpseErrorEvent) => {
-      setLootErrorMessage(payload.message);
+      setLootErrorMessage(getCorpseErrorMessage(payload));
     });
 
     socket.on(worldEventNames.inventoryUpdated, (payload) => {
@@ -760,6 +779,17 @@ export function GamePage() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [activeCombatMonsterId, connectionState, localPosition, monsters]);
+
+  useEffect(() => {
+    if (!localPosition) {
+      setOpenedCorpses([]);
+      return;
+    }
+
+    setOpenedCorpses((currentCorpses) =>
+      currentCorpses.filter((corpse) => isInCorpseInteractionRange(localPosition, corpse))
+    );
+  }, [localPosition]);
 
   if (!characterId) {
     return (
