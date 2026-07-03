@@ -1,10 +1,20 @@
 import type {
   CharacterSummary,
   CombatErrorEvent,
+  ContainerErrorEvent,
+  ContainerState,
   Corpse,
   CorpseErrorEvent,
+  CorpseItem,
+  EquipmentErrorEvent,
+  EquipmentSlot,
+  EquipmentSlotState,
+  GroundItem,
+  GroundItemErrorEvent,
   InventoryErrorEvent,
   InventoryItem,
+  InventoryMoveTarget,
+  InventorySlot,
   MoveDirection,
   Position,
   WorldClientToServerEvents,
@@ -13,8 +23,8 @@ import type {
   WorldPlayer,
   WorldServerToClientEvents
 } from "@aldrym/shared";
-import { createLocalMap, resolveLocalPlayerSpawn, worldEventNames } from "@aldrym/shared";
-import { useEffect, useRef, useState } from "react";
+import { createLocalMap, equipmentSlots, resolveLocalPlayerSpawn, worldEventNames } from "@aldrym/shared";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { io, type Socket } from "socket.io-client";
 
@@ -28,8 +38,22 @@ type WorldConnectionState = "connecting" | "connected" | "joined" | "disconnecte
 const localMap = createLocalMap();
 const playerScreenTileHalfHeight = 5;
 const playerScreenTileHalfWidth = 7;
-const equipmentSlots = ["Head", "Body", "Legs", "Weapon", "Shield", "Feet"];
-const inventorySlotCount = 10;
+
+type DragItemLocation =
+  | { locationType: "root"; slotIndex: number }
+  | { locationType: "container"; containerItemId: string; slotIndex: number }
+  | { locationType: "equipment"; equipmentSlot: EquipmentSlot }
+  | { locationType: "ground"; groundItemId: string }
+  | { locationType: "corpse"; corpseId: string; corpseItemId: string };
+
+interface DragItemPayload {
+  corpseId?: string;
+  corpseItemId?: string;
+  itemId?: string;
+  groundItemId?: string;
+  quantity?: number;
+  location: DragItemLocation;
+}
 
 function upsertWorldPlayer(players: WorldPlayer[], nextPlayer: WorldPlayer): WorldPlayer[] {
   const existingIndex = players.findIndex((player) => player.characterId === nextPlayer.characterId);
@@ -216,37 +240,55 @@ function Meter({
 function GameViewport({
   activeCombatMonsterId,
   corpses,
+  groundItems,
   localCharacterId,
   monsters,
   onAttackMonster,
+  onDropCorpseItemToGround,
+  onDropItemToGround,
+  onMoveGroundItem,
   onMoveIntent,
   onOpenCorpse,
+  onTakeGroundItem,
   players
 }: {
   activeCombatMonsterId: string | null;
   corpses: Corpse[];
+  groundItems: GroundItem[];
   localCharacterId: string;
   monsters: WorldMonster[];
   onAttackMonster: (monsterId: string) => void;
+  onDropCorpseItemToGround: (corpseId: string, corpseItemId: string, quantity: number, position: Position) => void;
+  onDropItemToGround: (itemId: string, position: Position) => void;
+  onMoveGroundItem: (groundItemId: string, position: Position) => void;
   onMoveIntent: (direction: MoveDirection) => void;
   onOpenCorpse: (corpseId: string) => void;
+  onTakeGroundItem: (groundItemId: string) => void;
   players: WorldPlayer[];
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<{
     destroy: () => void;
+    getTilePositionFromClientPoint: (clientX: number, clientY: number) => Position | null;
     setActiveCombatMonsterId: (monsterId: string | null) => void;
     setCorpses: (nextCorpses: Corpse[]) => void;
+    setGroundItems: (nextGroundItems: GroundItem[]) => void;
     setMonsters: (nextMonsters: WorldMonster[]) => void;
     setPlayers: (nextPlayers: WorldPlayer[]) => void;
   } | null>(null);
   const activeCombatMonsterIdRef = useRef(activeCombatMonsterId);
   const attackMonsterRef = useRef(onAttackMonster);
   const corpsesRef = useRef(corpses);
+  const groundItemsRef = useRef(groundItems);
   const monstersRef = useRef(monsters);
+  const moveGroundItemRef = useRef(onMoveGroundItem);
   const moveIntentRef = useRef(onMoveIntent);
   const openCorpseRef = useRef(onOpenCorpse);
   const playersRef = useRef(players);
+  const takeGroundItemRef = useRef(onTakeGroundItem);
+  const draggedGroundItemIdRef = useRef<string | null>(null);
+  const getDropTileFromEvent = (event: DragEvent<HTMLDivElement>): Position | null =>
+    gameRef.current?.getTilePositionFromClientPoint(event.clientX, event.clientY) ?? null;
 
   useEffect(() => {
     activeCombatMonsterIdRef.current = activeCombatMonsterId;
@@ -263,9 +305,18 @@ function GameViewport({
   }, [corpses]);
 
   useEffect(() => {
+    groundItemsRef.current = groundItems;
+    gameRef.current?.setGroundItems(groundItems);
+  }, [groundItems]);
+
+  useEffect(() => {
     monstersRef.current = monsters;
     gameRef.current?.setMonsters(monsters);
   }, [monsters]);
+
+  useEffect(() => {
+    moveGroundItemRef.current = onMoveGroundItem;
+  }, [onMoveGroundItem]);
 
   useEffect(() => {
     moveIntentRef.current = onMoveIntent;
@@ -276,9 +327,26 @@ function GameViewport({
   }, [onOpenCorpse]);
 
   useEffect(() => {
+    takeGroundItemRef.current = onTakeGroundItem;
+  }, [onTakeGroundItem]);
+
+  useEffect(() => {
     playersRef.current = players;
     gameRef.current?.setPlayers(players);
   }, [players]);
+
+  useEffect(() => {
+    const handleGroundItemDragStart = (event: Event) => {
+      const detail = (event as CustomEvent<{ groundItemId: string }>).detail;
+      draggedGroundItemIdRef.current = detail?.groundItemId ?? null;
+    };
+
+    window.addEventListener("aldrym:ground-item-drag-start", handleGroundItemDragStart);
+
+    return () => {
+      window.removeEventListener("aldrym:ground-item-drag-start", handleGroundItemDragStart);
+    };
+  }, []);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -300,11 +368,14 @@ function GameViewport({
       const game = new AldrymGame({
         activeCombatMonsterId: activeCombatMonsterIdRef.current,
         corpses: corpsesRef.current,
+        groundItems: groundItemsRef.current,
         localCharacterId,
         monsters: monstersRef.current,
         onAttackMonster: (monsterId) => attackMonsterRef.current(monsterId),
+        onMoveGroundItem: (groundItemId, position) => moveGroundItemRef.current(groundItemId, position),
         onMoveIntent: (direction) => moveIntentRef.current(direction),
         onOpenCorpse: (corpseId) => openCorpseRef.current(corpseId),
+        onTakeGroundItem: (groundItemId) => takeGroundItemRef.current(groundItemId),
         parent: mountElement,
         players: playersRef.current
       });
@@ -312,6 +383,7 @@ function GameViewport({
       gameRef.current = game;
       game.setActiveCombatMonsterId(activeCombatMonsterIdRef.current);
       game.setCorpses(corpsesRef.current);
+      game.setGroundItems(groundItemsRef.current);
       game.setMonsters(monstersRef.current);
       game.setPlayers(playersRef.current);
     }
@@ -325,18 +397,60 @@ function GameViewport({
     };
   }, [localCharacterId]);
 
-  return <div className="game-client__viewport-mount" ref={containerRef} />;
+  return (
+    <div
+      className="game-client__viewport-mount"
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+      }}
+      onDrop={(event) => {
+        const payload = readDragPayload(event);
+
+        const dropPosition = getDropTileFromEvent(event);
+        const draggedGroundItemId = draggedGroundItemIdRef.current;
+        draggedGroundItemIdRef.current = null;
+
+        if ((!payload && !draggedGroundItemId) || !dropPosition) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (payload?.itemId) {
+          onDropItemToGround(payload.itemId, dropPosition);
+          return;
+        }
+
+        if (payload?.corpseId && payload.corpseItemId) {
+          onDropCorpseItemToGround(payload.corpseId, payload.corpseItemId, payload.quantity ?? 1, dropPosition);
+          return;
+        }
+
+        const groundItemId = payload?.groundItemId ?? draggedGroundItemId;
+
+        if (groundItemId) {
+          onMoveGroundItem(groundItemId, dropPosition);
+        }
+      }}
+      ref={containerRef}
+    />
+  );
 }
 
 function LootWindow({
   corpse,
   errorMessage,
   onClose,
+  onDropItemToCorpse,
   onTakeItem
 }: {
   corpse: Corpse | null;
   errorMessage: string | null;
   onClose: () => void;
+  onDropItemToCorpse: (corpseId: string, itemId: string) => void;
   onTakeItem: (corpseId: string, corpseItemId: string, quantity: number) => void;
 }) {
   if (!corpse && !errorMessage) {
@@ -344,7 +458,28 @@ function LootWindow({
   }
 
   return (
-    <section className="loot-window">
+    <section
+      className="loot-window"
+      onDragOver={(event) => {
+        if (!corpse) {
+          return;
+        }
+
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+      }}
+      onDrop={(event) => {
+        const payload = readDragPayload(event);
+
+        if (!corpse || !payload?.itemId) {
+          return;
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+        onDropItemToCorpse(corpse.id, payload.itemId);
+      }}
+    >
       <div className="loot-window__header">
         <strong>{corpse ? `${corpse.monsterName} Corpse` : "Loot"}</strong>
         <button className="loot-window__close" onClick={onClose} type="button">
@@ -358,7 +493,18 @@ function LootWindow({
         corpse.items.length > 0 ? (
           <ul className="loot-list">
             {corpse.items.map((item) => (
-              <li className="loot-list__item" key={item.corpseItemId}>
+              <li
+                className="loot-list__item"
+                draggable
+                key={item.corpseItemId}
+                onDragStart={(event) => {
+                  const payload = createCorpseDragPayload(corpse.id, item);
+                  window.dispatchEvent(new CustomEvent("aldrym:item-drag-start"));
+                  event.dataTransfer.effectAllowed = "move";
+                  event.dataTransfer.setData("application/x-aldrym-item", payload);
+                  event.dataTransfer.setData("text/plain", payload);
+                }}
+              >
                 <span>
                   {item.name}
                   {item.quantity > 1 ? ` x${item.quantity}` : ""}
@@ -382,31 +528,257 @@ function LootWindow({
   );
 }
 
-function HorizontalInventory({ items }: { items: InventoryItem[] }) {
-  const slots = Array.from({ length: inventorySlotCount }, (_, index) => items[index] ?? null);
+function formatEquipmentSlot(slot: EquipmentSlot): string {
+  return slot.charAt(0).toUpperCase() + slot.slice(1);
+}
+
+function createDragPayload(item: InventoryItem, location: DragItemLocation): string {
+  return JSON.stringify({
+    itemId: item.id,
+    location
+  } satisfies DragItemPayload);
+}
+
+function createCorpseDragPayload(corpseId: string, item: CorpseItem): string {
+  return JSON.stringify({
+    corpseId,
+    corpseItemId: item.corpseItemId,
+    quantity: item.quantity,
+    location: {
+      locationType: "corpse",
+      corpseId,
+      corpseItemId: item.corpseItemId
+    }
+  } satisfies DragItemPayload);
+}
+
+function readDragPayload(event: DragEvent): DragItemPayload | null {
+  const rawPayload = event.dataTransfer.getData("application/x-aldrym-item") || event.dataTransfer.getData("text/plain");
+
+  if (!rawPayload) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(rawPayload) as DragItemPayload;
+    return typeof payload.itemId === "string" || typeof payload.groundItemId === "string" || typeof payload.corpseItemId === "string"
+      ? payload
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function ItemSlot({
+  item,
+  label,
+  location,
+  onDropItem,
+  onTakeCorpseItemToTarget,
+  onTakeGroundItemToTarget,
+  onOpenContainer,
+  onQuickEquip
+}: {
+  item: InventoryItem | null;
+  label: string;
+  location: DragItemLocation;
+  onDropItem: (itemId: string, target: InventoryMoveTarget) => void;
+  onTakeCorpseItemToTarget: (
+    corpseId: string,
+    corpseItemId: string,
+    quantity: number,
+    target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>
+  ) => void;
+  onTakeGroundItemToTarget: (groundItemId: string, target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>) => void;
+  onOpenContainer: (containerItemId: string) => void;
+  onQuickEquip: (itemId: string) => void;
+}) {
+  const [dragState, setDragState] = useState<"none" | "valid" | "invalid">("none");
+  const target: InventoryMoveTarget | null =
+    location.locationType === "container"
+      ? { locationType: "container", containerItemId: location.containerItemId, slotIndex: location.slotIndex }
+      : location.locationType === "equipment"
+        ? { locationType: "equipment", equipmentSlot: location.equipmentSlot }
+        : location.locationType === "root"
+          ? { locationType: "root", slotIndex: location.slotIndex }
+          : null;
+  const tooltip = item
+    ? `${item.name}${item.stackable ? ` x${item.quantity}` : ""}\nType: ${item.itemType}`
+    : label;
 
   return (
-    <section className="game-inventory-bar">
-      <div className="game-inventory-bar__header">
-        <span>Inventory</span>
-        <strong>
-          {items.length} / {inventorySlotCount}
-        </strong>
+    <div
+      aria-grabbed={Boolean(item)}
+      className={[
+        item ? "game-inventory-bar__item" : "game-inventory-bar__item game-inventory-bar__item--empty",
+        dragState === "valid" ? "game-inventory-bar__item--valid-target" : "",
+        dragState === "invalid" ? "game-inventory-bar__item--invalid-target" : ""
+      ].filter(Boolean).join(" ")}
+      data-inventory-drop-target={target && target.locationType !== "root" ? JSON.stringify(target) : undefined}
+      draggable={Boolean(item)}
+      role="listitem"
+      onContextMenu={(event) => {
+        if (!item) {
+          return;
+        }
+
+        event.preventDefault();
+
+        if (item.isContainer) {
+          onOpenContainer(item.id);
+          return;
+        }
+
+        if (item.compatibleEquipmentSlots?.length) {
+          onQuickEquip(item.id);
+        }
+      }}
+      onDragStart={(event) => {
+        if (!item) {
+          event.preventDefault();
+          return;
+        }
+
+        const payload = createDragPayload(item, location);
+        window.dispatchEvent(new CustomEvent("aldrym:item-drag-start"));
+        event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("application/x-aldrym-item", payload);
+        event.dataTransfer.setData("text/plain", payload);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.dataTransfer.dropEffect = "move";
+        setDragState("valid");
+      }}
+      onDragLeave={() => setDragState("none")}
+      onDrop={(event) => {
+        const payload = readDragPayload(event);
+        event.preventDefault();
+        event.stopPropagation();
+        setDragState("none");
+
+        if (!payload || !target) {
+          return;
+        }
+
+        if (payload.corpseId && payload.corpseItemId && target.locationType !== "root") {
+          onTakeCorpseItemToTarget(payload.corpseId, payload.corpseItemId, payload.quantity ?? 1, target);
+          return;
+        }
+
+        if (payload.groundItemId && target.locationType !== "root") {
+          onTakeGroundItemToTarget(payload.groundItemId, target);
+          return;
+        }
+
+        if (payload.itemId) {
+          onDropItem(payload.itemId, target);
+        }
+      }}
+      title={tooltip}
+    >
+      {item ? (
+        <>
+          <span>{item.name}</span>
+          {item.stackable || item.quantity > 1 ? <strong>{item.quantity}</strong> : null}
+        </>
+      ) : (
+        <span>{label}</span>
+      )}
+    </div>
+  );
+}
+
+function EquipmentPanel({
+  slots,
+  onDropItem,
+  onTakeCorpseItemToTarget,
+  onTakeGroundItemToTarget,
+  onOpenContainer,
+  onQuickEquip
+}: {
+  slots: EquipmentSlotState[];
+  onDropItem: (itemId: string, target: InventoryMoveTarget) => void;
+  onTakeCorpseItemToTarget: (
+    corpseId: string,
+    corpseItemId: string,
+    quantity: number,
+    target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>
+  ) => void;
+  onTakeGroundItemToTarget: (groundItemId: string, target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>) => void;
+  onOpenContainer: (containerItemId: string) => void;
+  onQuickEquip: (itemId: string) => void;
+}) {
+  return (
+    <div className="equipment-grid">
+      {slots.map((slot) => (
+        <ItemSlot
+          item={slot.item}
+          key={slot.slot}
+          label={formatEquipmentSlot(slot.slot)}
+          location={{ locationType: "equipment", equipmentSlot: slot.slot }}
+          onDropItem={onDropItem}
+          onTakeCorpseItemToTarget={onTakeCorpseItemToTarget}
+          onTakeGroundItemToTarget={onTakeGroundItemToTarget}
+          onOpenContainer={onOpenContainer}
+          onQuickEquip={onQuickEquip}
+        />
+      ))}
+    </div>
+  );
+}
+
+function BackpackWindow({
+  container,
+  onClose,
+  onDropItem,
+  onTakeCorpseItemToTarget,
+  onTakeGroundItemToTarget,
+  onOpenContainer,
+  onQuickEquip
+}: {
+  container: ContainerState;
+  onClose: (containerItemId: string) => void;
+  onDropItem: (itemId: string, target: InventoryMoveTarget) => void;
+  onTakeCorpseItemToTarget: (
+    corpseId: string,
+    corpseItemId: string,
+    quantity: number,
+    target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>
+  ) => void;
+  onTakeGroundItemToTarget: (groundItemId: string, target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>) => void;
+  onOpenContainer: (containerItemId: string) => void;
+  onQuickEquip: (itemId: string) => void;
+}) {
+  const occupiedSlotCount = container.slots.filter((slot) => slot.item).length;
+
+  return (
+    <section className="backpack-window">
+      <div className="loot-window__header">
+        <strong>{container.container.name}</strong>
+        <span>
+          {occupiedSlotCount} / {container.slots.length}
+        </span>
+        <button className="loot-window__close" onClick={() => onClose(container.container.id)} type="button">
+          x
+        </button>
       </div>
-      <ul className="game-inventory-bar__items">
-        {slots.map((item, index) => (
-          <li className={item ? "game-inventory-bar__item" : "game-inventory-bar__item game-inventory-bar__item--empty"} key={item?.id ?? `empty-${index}`}>
-            {item ? (
-              <>
-              <span>{item.name}</span>
-              <strong>{item.quantity}</strong>
-              </>
-            ) : (
-              <span>Empty</span>
-            )}
-          </li>
+      <div className="backpack-window__items" role="list">
+        {container.slots.map((slot) => (
+          <ItemSlot
+            item={slot.item}
+            key={slot.item?.id ?? `${container.container.id}-${slot.slotIndex}`}
+            label="Empty"
+            location={{ locationType: "container", containerItemId: container.container.id, slotIndex: slot.slotIndex }}
+            onDropItem={onDropItem}
+            onTakeCorpseItemToTarget={onTakeCorpseItemToTarget}
+            onTakeGroundItemToTarget={onTakeGroundItemToTarget}
+            onOpenContainer={onOpenContainer}
+            onQuickEquip={onQuickEquip}
+          />
         ))}
-      </ul>
+      </div>
     </section>
   );
 }
@@ -414,14 +786,19 @@ function HorizontalInventory({ items }: { items: InventoryItem[] }) {
 export function GamePage() {
   const { characterId } = useParams();
   const { token } = useAuth();
+  const draggedGroundItemIdRef = useRef<string | null>(null);
   const socketRef = useRef<Socket<WorldServerToClientEvents, WorldClientToServerEvents> | null>(null);
   const [activeCombatMonsterId, setActiveCombatMonsterId] = useState<string | null>(null);
   const [character, setCharacter] = useState<CharacterSummary | null>(null);
   const [connectionState, setConnectionState] = useState<WorldConnectionState>("connecting");
+  const [containers, setContainers] = useState<ContainerState[]>([]);
   const [corpses, setCorpses] = useState<Corpse[]>([]);
+  const [equipmentItems, setEquipmentItems] = useState<EquipmentSlotState[]>(
+    equipmentSlots.map((slot) => ({ slot, item: null }))
+  );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
-  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [groundItems, setGroundItems] = useState<GroundItem[]>([]);
   const [isLoadingCharacter, setIsLoadingCharacter] = useState(true);
   const [lootErrorMessage, setLootErrorMessage] = useState<string | null>(null);
   const [monsters, setMonsters] = useState<WorldMonster[]>([]);
@@ -483,9 +860,11 @@ export function GamePage() {
     socketRef.current = socket;
     setActiveCombatMonsterId(null);
     setConnectionState("connecting");
+    setContainers([]);
     setCorpses([]);
+    setEquipmentItems(equipmentSlots.map((slot) => ({ slot, item: null })));
     setFeedbackMessage(null);
-    setInventoryItems([]);
+    setGroundItems([]);
     setLootErrorMessage(null);
     setMonsters([]);
     setOpenedCorpses([]);
@@ -518,6 +897,10 @@ export function GamePage() {
 
     socket.on(worldEventNames.worldCorpses, (payload) => {
       setCorpses(payload.corpses);
+    });
+
+    socket.on(worldEventNames.worldGroundItems, (payload) => {
+      setGroundItems(payload.groundItems);
     });
 
     socket.on(worldEventNames.playerJoined, (payload) => {
@@ -588,12 +971,56 @@ export function GamePage() {
       setLootErrorMessage(getCorpseErrorMessage(payload));
     });
 
+    socket.on(worldEventNames.groundItemCreated, (payload) => {
+      setGroundItems((currentGroundItems) => [
+        ...currentGroundItems.filter((groundItem) => groundItem.id !== payload.groundItem.id),
+        payload.groundItem
+      ]);
+    });
+
+    socket.on(worldEventNames.groundItemRemoved, (payload) => {
+      setGroundItems((currentGroundItems) => currentGroundItems.filter((groundItem) => groundItem.id !== payload.groundItemId));
+    });
+
+    socket.on(worldEventNames.groundItemError, (payload: GroundItemErrorEvent) => {
+      setFeedbackMessage(payload.message);
+    });
+
     socket.on(worldEventNames.inventoryUpdated, (payload) => {
-      setInventoryItems(payload.items);
       setFeedbackMessage(payload.message ?? "Inventory updated.");
     });
 
     socket.on(worldEventNames.inventoryError, (payload: InventoryErrorEvent) => {
+      setFeedbackMessage(payload.message);
+    });
+
+    socket.on(worldEventNames.equipmentUpdated, (payload) => {
+      setEquipmentItems(payload.slots);
+      setFeedbackMessage(payload.message ?? "Equipment updated.");
+    });
+
+    socket.on(worldEventNames.equipmentError, (payload: EquipmentErrorEvent) => {
+      setFeedbackMessage(payload.message);
+    });
+
+    socket.on(worldEventNames.containerOpened, (payload) => {
+      setContainers((currentContainers) => [
+        ...currentContainers.filter((container) => container.container.id !== payload.container.id),
+        { container: payload.container, slots: payload.slots }
+      ]);
+      setFeedbackMessage(payload.message ?? `${payload.container.name} opened.`);
+    });
+
+    socket.on(worldEventNames.containerUpdated, (payload) => {
+      setContainers((currentContainers) =>
+        currentContainers.map((container) =>
+          container.container.id === payload.container.id ? { container: payload.container, slots: payload.slots } : container
+        )
+      );
+      setFeedbackMessage(payload.message ?? "Container updated.");
+    });
+
+    socket.on(worldEventNames.containerError, (payload: ContainerErrorEvent) => {
       setFeedbackMessage(payload.message);
     });
 
@@ -675,8 +1102,10 @@ export function GamePage() {
     socket.on("disconnect", (reason) => {
       setActiveCombatMonsterId(null);
       setConnectionState("disconnected");
+      setContainers([]);
       setCorpses([]);
-      setInventoryItems([]);
+      setEquipmentItems(equipmentSlots.map((slot) => ({ slot, item: null })));
+      setGroundItems([]);
       setMonsters([]);
       setOpenedCorpses([]);
       setPlayers([]);
@@ -735,6 +1164,171 @@ export function GamePage() {
     }
 
     socket.emit(worldEventNames.corpseTakeItem, { corpseId, corpseItemId, quantity });
+  };
+
+  const handleDropCorpseItemToGround = (corpseId: string, corpseItemId: string, quantity: number, position: Position) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.corpseDropItem, { corpseId, corpseItemId, quantity, position });
+  };
+
+  const handleTakeCorpseItemToTarget = (
+    corpseId: string,
+    corpseItemId: string,
+    quantity: number,
+    target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>
+  ) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.corpseTakeItem, { corpseId, corpseItemId, quantity, target });
+  };
+
+  const handleDropItemToCorpse = (corpseId: string, itemId: string) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.corpseAddItem, { corpseId, itemId });
+  };
+
+  const handleDropItem = (itemId: string, target: InventoryMoveTarget) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.inventoryMoveItem, { itemId, target });
+  };
+
+  const handleDropItemToGround = (itemId: string, position: Position) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.inventoryDropItem, { itemId, position });
+  };
+
+  const handleTakeGroundItem = (groundItemId: string) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.groundItemTake, { groundItemId });
+  };
+
+  const handleMoveGroundItem = (groundItemId: string, position: Position) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.groundItemMove, { groundItemId, position });
+  };
+
+  const handleTakeGroundItemToTarget = (
+    groundItemId: string,
+    target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>
+  ) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.groundItemTake, { groundItemId, target });
+  };
+
+  useEffect(() => {
+    const handleGroundItemDragStart = (event: Event) => {
+      const detail = (event as CustomEvent<{ groundItemId: string }>).detail;
+
+      if (!detail?.groundItemId) {
+        return;
+      }
+
+      draggedGroundItemIdRef.current = detail.groundItemId;
+    };
+
+    const handleGroundItemMouseUp = (event: MouseEvent) => {
+      const groundItemId = draggedGroundItemIdRef.current;
+      draggedGroundItemIdRef.current = null;
+
+      if (!groundItemId) {
+        return;
+      }
+
+      const element = document.elementFromPoint(event.clientX, event.clientY);
+      const targetElement = element?.closest("[data-inventory-drop-target]") as HTMLElement | null;
+      const rawTarget = targetElement?.dataset.inventoryDropTarget;
+
+      if (!rawTarget) {
+        return;
+      }
+
+      try {
+        const target = JSON.parse(rawTarget) as Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>;
+
+        if (target.locationType === "container" || target.locationType === "equipment") {
+          handleTakeGroundItemToTarget(groundItemId, target);
+        }
+      } catch {
+        return;
+      }
+    };
+
+    window.addEventListener("aldrym:ground-item-drag-start", handleGroundItemDragStart);
+    window.addEventListener("mouseup", handleGroundItemMouseUp);
+
+    return () => {
+      window.removeEventListener("aldrym:ground-item-drag-start", handleGroundItemDragStart);
+      window.removeEventListener("mouseup", handleGroundItemMouseUp);
+    };
+  }, [connectionState]);
+
+  const handleQuickEquip = (itemId: string) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.inventoryEquipItem, { itemId });
+  };
+
+  const handleOpenContainer = (containerItemId: string) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    if (containers.some((container) => container.container.id === containerItemId)) {
+      handleCloseContainer(containerItemId);
+      return;
+    }
+
+    socket.emit(worldEventNames.containerOpen, { containerItemId });
+  };
+
+  const handleCloseContainer = (containerItemId: string) => {
+    socketRef.current?.emit(worldEventNames.containerClose, { containerItemId });
+    setContainers((currentContainers) => currentContainers.filter((container) => container.container.id !== containerItemId));
   };
 
   const handleStopCombat = () => {
@@ -832,14 +1426,34 @@ export function GamePage() {
               <GameViewport
                 activeCombatMonsterId={activeCombatMonsterId}
                 corpses={corpses}
+                groundItems={groundItems}
                 localCharacterId={character.id}
                 monsters={monsters}
                 onAttackMonster={handleAttackMonster}
+                onDropCorpseItemToGround={handleDropCorpseItemToGround}
+                onDropItemToGround={handleDropItemToGround}
+                onMoveGroundItem={handleMoveGroundItem}
                 onMoveIntent={handleMoveIntent}
                 onOpenCorpse={handleOpenCorpse}
+                onTakeGroundItem={handleTakeGroundItem}
                 players={players}
               />
-              <HorizontalInventory items={inventoryItems} />
+              {containers.length > 0 ? (
+                <div className="backpack-window-row">
+                  {containers.map((container) => (
+                    <BackpackWindow
+                      container={container}
+                      key={container.container.id}
+                      onClose={handleCloseContainer}
+                      onDropItem={handleDropItem}
+                      onTakeCorpseItemToTarget={handleTakeCorpseItemToTarget}
+                      onTakeGroundItemToTarget={handleTakeGroundItemToTarget}
+                      onOpenContainer={handleOpenContainer}
+                      onQuickEquip={handleQuickEquip}
+                    />
+                  ))}
+                </div>
+              ) : null}
               {openedCorpses.length > 0 || lootErrorMessage ? (
                 <div className="loot-window-row">
                   {openedCorpses.map((corpse) => (
@@ -850,6 +1464,7 @@ export function GamePage() {
                       onClose={() => {
                         setOpenedCorpses((currentCorpses) => removeCorpse(currentCorpses, corpse.id));
                       }}
+                      onDropItemToCorpse={handleDropItemToCorpse}
                       onTakeItem={handleTakeCorpseItem}
                     />
                   ))}
@@ -860,6 +1475,7 @@ export function GamePage() {
                       onClose={() => {
                         setLootErrorMessage(null);
                       }}
+                      onDropItemToCorpse={handleDropItemToCorpse}
                       onTakeItem={handleTakeCorpseItem}
                     />
                   ) : null}
@@ -904,15 +1520,16 @@ export function GamePage() {
         <section className="client-panel">
           <div className="client-panel__header">
             <span>Equipment</span>
-            <strong>Empty</strong>
+            <strong>{equipmentItems.filter((slot) => slot.item).length} / {equipmentItems.length}</strong>
           </div>
-          <div className="equipment-grid">
-            {equipmentSlots.map((slot) => (
-              <div className="equipment-slot" key={slot}>
-                {slot}
-              </div>
-            ))}
-          </div>
+          <EquipmentPanel
+            onDropItem={handleDropItem}
+            onTakeCorpseItemToTarget={handleTakeCorpseItemToTarget}
+            onTakeGroundItemToTarget={handleTakeGroundItemToTarget}
+            onOpenContainer={handleOpenContainer}
+            onQuickEquip={handleQuickEquip}
+            slots={equipmentItems}
+          />
         </section>
 
         <section className="client-panel">

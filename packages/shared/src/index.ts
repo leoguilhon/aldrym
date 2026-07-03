@@ -116,17 +116,48 @@ export interface WorldMonster extends Position {
   spawnZ: number;
 }
 
+export type ItemType = "currency" | "creature_part" | "weapon" | "consumable" | "container";
+
+export const equipmentSlots = ["head", "body", "legs", "weapon", "shield", "feet", "backpack"] as const;
+
+export type EquipmentSlot = (typeof equipmentSlots)[number];
+
+export type InventoryLocationType = "root" | "container" | "equipment";
+
 export interface ItemDefinition {
   itemKey: string;
   name: string;
   stackable: boolean;
+  itemType: ItemType;
+  compatibleEquipmentSlots?: EquipmentSlot[];
+  isContainer: boolean;
+  containerSize: number | null;
 }
 
 export interface InventoryItem extends ItemDefinition {
   id: string;
   quantity: number;
+  locationType: InventoryLocationType;
+  slotIndex: number | null;
+  containerItemId: string | null;
+  equipmentSlot: EquipmentSlot | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface InventorySlot {
+  slotIndex: number;
+  item: InventoryItem | null;
+}
+
+export interface EquipmentSlotState {
+  slot: EquipmentSlot;
+  item: InventoryItem | null;
+}
+
+export interface ContainerState {
+  container: InventoryItem;
+  slots: InventorySlot[];
 }
 
 export interface CorpseItem extends ItemDefinition {
@@ -142,6 +173,12 @@ export interface Corpse extends Position {
   createdAt: string;
   decayAt: string;
   isEmpty: boolean;
+}
+
+export interface GroundItem extends Position, ItemDefinition {
+  id: string;
+  quantity: number;
+  createdAt: string;
 }
 
 export interface WorldJoinRequest {
@@ -164,6 +201,10 @@ export interface WorldCorpsesEvent {
   corpses: Corpse[];
 }
 
+export interface WorldGroundItemsEvent {
+  groundItems: GroundItem[];
+}
+
 export interface PlayerMoveRequest {
   direction: MoveDirection;
 }
@@ -180,6 +221,72 @@ export interface CorpseTakeItemRequest {
   corpseId: string;
   corpseItemId: string;
   quantity: number;
+  target?: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>;
+}
+
+export interface CorpseAddItemRequest {
+  corpseId: string;
+  itemId: string;
+}
+
+export interface CorpseDropItemRequest {
+  corpseId: string;
+  corpseItemId: string;
+  quantity: number;
+  position: Position;
+}
+
+export type InventoryMoveTarget =
+  | {
+      locationType: "root";
+      slotIndex?: number;
+    }
+  | {
+      locationType: "container";
+      containerItemId: string;
+      slotIndex?: number;
+    }
+  | {
+      locationType: "equipment";
+      equipmentSlot: EquipmentSlot;
+    };
+
+export interface InventoryMoveItemRequest {
+  itemId: string;
+  target: InventoryMoveTarget;
+}
+
+export interface InventoryEquipItemRequest {
+  itemId: string;
+  equipmentSlot?: EquipmentSlot;
+}
+
+export interface InventoryUnequipItemRequest {
+  equipmentSlot: EquipmentSlot;
+  target?: Extract<InventoryMoveTarget, { locationType: "root" | "container" }>;
+}
+
+export interface ContainerOpenRequest {
+  containerItemId: string;
+}
+
+export interface ContainerCloseRequest {
+  containerItemId: string;
+}
+
+export interface InventoryDropItemRequest {
+  itemId: string;
+  position: Position;
+}
+
+export interface GroundItemTakeRequest {
+  groundItemId: string;
+  target?: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>;
+}
+
+export interface GroundItemMoveRequest {
+  groundItemId: string;
+  position: Position;
 }
 
 export interface StopCombatRequest {
@@ -247,17 +354,53 @@ export interface CorpseUpdatedEvent {
   corpse: Corpse;
 }
 
+export interface GroundItemCreatedEvent {
+  groundItem: GroundItem;
+}
+
+export interface GroundItemRemovedEvent {
+  groundItemId: string;
+}
+
+export interface GroundItemErrorEvent {
+  message: string;
+  code?: string;
+}
+
 export interface CorpseErrorEvent {
   message: string;
   code?: string;
 }
 
 export interface InventoryUpdatedEvent {
-  items: InventoryItem[];
+  items: InventorySlot[];
   message?: string;
 }
 
 export interface InventoryErrorEvent {
+  message: string;
+  code?: string;
+}
+
+export interface EquipmentUpdatedEvent {
+  slots: EquipmentSlotState[];
+  message?: string;
+}
+
+export interface EquipmentErrorEvent {
+  message: string;
+  code?: string;
+}
+
+export interface ContainerOpenedEvent extends ContainerState {
+  message?: string;
+}
+
+export interface ContainerUpdatedEvent extends ContainerState {
+  message?: string;
+}
+
+export interface ContainerErrorEvent {
   message: string;
   code?: string;
 }
@@ -316,6 +459,16 @@ export interface WorldClientToServerEvents {
   "combat:stop": (payload?: StopCombatRequest) => void;
   "corpse:open": (payload: CorpseOpenRequest) => void;
   "corpse:take-item": (payload: CorpseTakeItemRequest) => void;
+  "corpse:add-item": (payload: CorpseAddItemRequest) => void;
+  "corpse:drop-item": (payload: CorpseDropItemRequest) => void;
+  "inventory:move-item": (payload: InventoryMoveItemRequest) => void;
+  "inventory:equip-item": (payload: InventoryEquipItemRequest) => void;
+  "inventory:unequip-item": (payload: InventoryUnequipItemRequest) => void;
+  "inventory:drop-item": (payload: InventoryDropItemRequest) => void;
+  "ground-item:take": (payload: GroundItemTakeRequest) => void;
+  "ground-item:move": (payload: GroundItemMoveRequest) => void;
+  "container:open": (payload: ContainerOpenRequest) => void;
+  "container:close": (payload: ContainerCloseRequest) => void;
 }
 
 export interface WorldServerToClientEvents {
@@ -323,6 +476,7 @@ export interface WorldServerToClientEvents {
   "world:players": (payload: WorldPlayersEvent) => void;
   "world:monsters": (payload: WorldMonstersEvent) => void;
   "world:corpses": (payload: WorldCorpsesEvent) => void;
+  "world:ground-items": (payload: WorldGroundItemsEvent) => void;
   "player:joined": (payload: PlayerJoinedEvent) => void;
   "player:moved": (payload: PlayerMovedEvent) => void;
   "player:left": (payload: PlayerLeftEvent) => void;
@@ -337,8 +491,16 @@ export interface WorldServerToClientEvents {
   "corpse:opened": (payload: CorpseOpenedEvent) => void;
   "corpse:updated": (payload: CorpseUpdatedEvent) => void;
   "corpse:error": (payload: CorpseErrorEvent) => void;
+  "ground-item:created": (payload: GroundItemCreatedEvent) => void;
+  "ground-item:removed": (payload: GroundItemRemovedEvent) => void;
+  "ground-item:error": (payload: GroundItemErrorEvent) => void;
   "inventory:updated": (payload: InventoryUpdatedEvent) => void;
   "inventory:error": (payload: InventoryErrorEvent) => void;
+  "equipment:updated": (payload: EquipmentUpdatedEvent) => void;
+  "equipment:error": (payload: EquipmentErrorEvent) => void;
+  "container:opened": (payload: ContainerOpenedEvent) => void;
+  "container:updated": (payload: ContainerUpdatedEvent) => void;
+  "container:error": (payload: ContainerErrorEvent) => void;
   "character:experience-updated": (payload: CharacterExperienceUpdatedEvent) => void;
   "character:level-up": (payload: CharacterLevelUpEvent) => void;
   "character:stats-updated": (payload: CharacterStatsUpdatedEvent) => void;
@@ -354,6 +516,7 @@ export const worldEventNames = {
   worldPlayers: "world:players",
   worldMonsters: "world:monsters",
   worldCorpses: "world:corpses",
+  worldGroundItems: "world:ground-items",
   worldError: "world:error",
   playerMove: "player:move",
   playerMoved: "player:moved",
@@ -369,6 +532,8 @@ export const worldEventNames = {
   monsterRespawned: "monster:respawned",
   corpseOpen: "corpse:open",
   corpseTakeItem: "corpse:take-item",
+  corpseAddItem: "corpse:add-item",
+  corpseDropItem: "corpse:drop-item",
   corpseCreated: "corpse:created",
   corpseRemoved: "corpse:removed",
   corpseOpened: "corpse:opened",
@@ -376,6 +541,22 @@ export const worldEventNames = {
   corpseError: "corpse:error",
   inventoryUpdated: "inventory:updated",
   inventoryError: "inventory:error",
+  inventoryMoveItem: "inventory:move-item",
+  inventoryEquipItem: "inventory:equip-item",
+  inventoryUnequipItem: "inventory:unequip-item",
+  inventoryDropItem: "inventory:drop-item",
+  groundItemTake: "ground-item:take",
+  groundItemMove: "ground-item:move",
+  groundItemCreated: "ground-item:created",
+  groundItemRemoved: "ground-item:removed",
+  groundItemError: "ground-item:error",
+  equipmentUpdated: "equipment:updated",
+  equipmentError: "equipment:error",
+  containerOpen: "container:open",
+  containerClose: "container:close",
+  containerOpened: "container:opened",
+  containerUpdated: "container:updated",
+  containerError: "container:error",
   characterExperienceUpdated: "character:experience-updated",
   characterLevelUp: "character:level-up",
   characterStatsUpdated: "character:stats-updated",

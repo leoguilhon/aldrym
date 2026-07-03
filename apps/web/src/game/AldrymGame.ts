@@ -1,4 +1,4 @@
-import type { Corpse, MoveDirection, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type { Corpse, GroundItem, MoveDirection, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
 import Phaser from "phaser";
 
 import { createGameConfig } from "./config/gameConfig";
@@ -8,9 +8,12 @@ import { MainScene } from "./scenes/MainScene";
 export interface AldrymGameOptions {
   activeCombatMonsterId?: string | null;
   corpses: Corpse[];
+  groundItems: GroundItem[];
   localCharacterId: string;
   monsters: WorldMonster[];
   onAttackMonster?: (monsterId: string) => void;
+  onMoveGroundItem?: (groundItemId: string, position: Position) => void;
+  onTakeGroundItem?: (groundItemId: string) => void;
   onOpenCorpse?: (corpseId: string) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
   parent: HTMLElement;
@@ -25,13 +28,16 @@ export class AldrymGame {
     this.scene = new MainScene({
       activeCombatMonsterId: options.activeCombatMonsterId,
       corpses: options.corpses,
+      groundItems: options.groundItems,
       initialPlayers: options.players,
       localCharacterId: options.localCharacterId,
       map: createLocalMap(),
       monsters: options.monsters,
       onAttackMonster: options.onAttackMonster,
+      onMoveGroundItem: options.onMoveGroundItem,
       onMoveIntent: options.onMoveIntent,
-      onOpenCorpse: options.onOpenCorpse
+      onOpenCorpse: options.onOpenCorpse,
+      onTakeGroundItem: options.onTakeGroundItem
     });
 
     this.game = new Phaser.Game(
@@ -52,6 +58,14 @@ export class AldrymGame {
 
   setCorpses(corpses: Corpse[]): void {
     this.scene.setCorpses(corpses);
+  }
+
+  setGroundItems(groundItems: GroundItem[]): void {
+    this.scene.setGroundItems(groundItems);
+  }
+
+  getTilePositionFromClientPoint(clientX: number, clientY: number): Position | null {
+    return this.scene.getTilePositionFromClientPoint(clientX, clientY);
   }
 
   setActiveCombatMonsterId(monsterId: string | null): void {

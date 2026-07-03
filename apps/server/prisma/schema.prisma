@@ -38,16 +38,25 @@ model Character {
 }
 
 model CharacterItem {
-  id          String    @id @default(cuid())
-  characterId String
-  itemKey     String
-  quantity    Int
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  character   Character @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  id                  String          @id @default(cuid())
+  characterId         String
+  itemKey             String
+  quantity            Int
+  locationType        String          @default("root")
+  slotIndex           Int?
+  containerItemId     String?
+  equipmentSlot       String?
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  character           Character       @relation(fields: [characterId], references: [id], onDelete: Cascade)
+  containerItem       CharacterItem?  @relation("ContainerContents", fields: [containerItemId], references: [id], onDelete: SetNull)
+  containedItems      CharacterItem[] @relation("ContainerContents")
 
   @@index([characterId])
   @@index([characterId, itemKey])
+  @@index([characterId, locationType])
+  @@index([characterId, containerItemId])
+  @@index([characterId, equipmentSlot])
 }
 
 model Monster {

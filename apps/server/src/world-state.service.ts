@@ -1,4 +1,4 @@
-import type { Corpse, CorpseItem, ItemDefinition, MonsterType, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type { Corpse, CorpseItem, GroundItem, ItemDefinition, MonsterType, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
 import { Injectable } from "@nestjs/common";
 
 interface OnlineWorldPlayer {
@@ -43,32 +43,60 @@ export const itemDefinitions: Record<string, ItemDefinition> = {
   gold_coin: {
     itemKey: "gold_coin",
     name: "Gold Coin",
-    stackable: true
+    stackable: true,
+    itemType: "currency",
+    isContainer: false,
+    containerSize: null
   },
   rat_tail: {
     itemKey: "rat_tail",
     name: "Rat Tail",
-    stackable: true
+    stackable: true,
+    itemType: "creature_part",
+    isContainer: false,
+    containerSize: null
   },
   beetle_shell: {
     itemKey: "beetle_shell",
     name: "Beetle Shell",
-    stackable: true
+    stackable: true,
+    itemType: "creature_part",
+    isContainer: false,
+    containerSize: null
   },
   moss_fang: {
     itemKey: "moss_fang",
     name: "Moss Fang",
-    stackable: true
+    stackable: true,
+    itemType: "creature_part",
+    isContainer: false,
+    containerSize: null
   },
   chipped_dagger: {
     itemKey: "chipped_dagger",
     name: "Chipped Dagger",
-    stackable: false
+    stackable: false,
+    itemType: "weapon",
+    compatibleEquipmentSlots: ["weapon"],
+    isContainer: false,
+    containerSize: null
   },
   small_health_flask: {
     itemKey: "small_health_flask",
     name: "Small Health Flask",
-    stackable: true
+    stackable: true,
+    itemType: "consumable",
+    isContainer: false,
+    containerSize: null
+  },
+  basic_backpack: {
+    itemKey: "basic_backpack",
+    name: "Basic Backpack",
+    stackable: false,
+    itemType: "container",
+    compatibleEquipmentSlots: ["backpack"],
+    isContainer: true,
+    containerSize: 20
   }
 };
 
@@ -108,6 +136,7 @@ const lootTables: Record<MonsterType, LootTableEntry[]> = {
 
 const CORPSE_DECAY_MS = 120000;
 const EMPTY_CORPSE_DECAY_MS = 15000;
+const CORPSE_SLOT_CAPACITY = 8;
 
 const initialMonsterSpawns: MonsterSpawn[] = [
   {
@@ -176,8 +205,10 @@ const initialMonsterSpawns: MonsterSpawn[] = [
 export class WorldStateService {
   private readonly playersBySocketId = new Map<string, OnlineWorldPlayer>();
   private readonly corpsesById = new Map<string, Corpse>();
+  private readonly groundItemsById = new Map<string, GroundItem>();
   private nextCorpseId = 1;
   private nextCorpseItemId = 1;
+  private nextGroundItemId = 1;
   private readonly monstersById = new Map<string, WorldMonsterState>(
     initialMonsterSpawns.map((spawn) => [
       spawn.id,
@@ -245,6 +276,10 @@ export class WorldStateService {
     return Array.from(this.corpsesById.values(), (corpse) => this.cloneCorpse(corpse));
   }
 
+  listGroundItems(): GroundItem[] {
+    return Array.from(this.groundItemsById.values(), (groundItem) => ({ ...groundItem }));
+  }
+
   getCorpse(corpseId: string): Corpse | null {
     const corpse = this.corpsesById.get(corpseId);
     return corpse ? this.cloneCorpse(corpse) : null;
@@ -258,6 +293,57 @@ export class WorldStateService {
     }
 
     return corpse ? this.cloneCorpse(corpse) : null;
+  }
+
+  createGroundItem(item: ItemDefinition & { quantity: number }, position: Position): GroundItem {
+    const groundItem: GroundItem = {
+      ...item,
+      id: `ground-item-${this.nextGroundItemId}`,
+      x: position.x,
+      y: position.y,
+      z: position.z,
+      createdAt: new Date().toISOString()
+    };
+
+    this.nextGroundItemId += 1;
+    this.groundItemsById.set(groundItem.id, groundItem);
+
+    return { ...groundItem };
+  }
+
+  getGroundItem(groundItemId: string): GroundItem | null {
+    const groundItem = this.groundItemsById.get(groundItemId);
+    return groundItem ? { ...groundItem } : null;
+  }
+
+  takeGroundItem(groundItemId: string): GroundItem | null {
+    const groundItem = this.groundItemsById.get(groundItemId) ?? null;
+
+    if (!groundItem) {
+      return null;
+    }
+
+    this.groundItemsById.delete(groundItemId);
+    return { ...groundItem };
+  }
+
+  restoreGroundItem(groundItem: GroundItem): GroundItem {
+    this.groundItemsById.set(groundItem.id, { ...groundItem });
+    return { ...groundItem };
+  }
+
+  moveGroundItem(groundItemId: string, position: Position): GroundItem | null {
+    const groundItem = this.groundItemsById.get(groundItemId);
+
+    if (!groundItem) {
+      return null;
+    }
+
+    groundItem.x = position.x;
+    groundItem.y = position.y;
+    groundItem.z = position.z;
+
+    return { ...groundItem };
   }
 
   getMonster(monsterId: string): WorldMonster | null {
@@ -288,6 +374,10 @@ export class WorldStateService {
     const items: CorpseItem[] = [];
 
     for (const entry of lootTable) {
+      if (items.length >= CORPSE_SLOT_CAPACITY) {
+        break;
+      }
+
       if (Math.random() > lootChanceThresholds[entry.chance]) {
         continue;
       }
@@ -367,6 +457,51 @@ export class WorldStateService {
     };
   }
 
+  addCorpseItem(corpseId: string, item: ItemDefinition & { quantity: number }): Corpse | null {
+    const corpse = this.corpsesById.get(corpseId);
+
+    if (!corpse) {
+      return null;
+    }
+
+    const existingItem = item.stackable ? corpse.items.find((corpseItem) => corpseItem.itemKey === item.itemKey) : null;
+
+    if (existingItem) {
+      existingItem.quantity += item.quantity;
+      corpse.isEmpty = false;
+      corpse.decayAt = new Date(Date.now() + CORPSE_DECAY_MS).toISOString();
+      return this.cloneCorpse(corpse);
+    }
+
+    if (corpse.items.length >= CORPSE_SLOT_CAPACITY) {
+      return null;
+    }
+
+    corpse.items.push({
+      ...item,
+      corpseItemId: `corpse-item-${this.nextCorpseItemId}`
+    });
+    this.nextCorpseItemId += 1;
+    corpse.isEmpty = false;
+    corpse.decayAt = new Date(Date.now() + CORPSE_DECAY_MS).toISOString();
+
+    return this.cloneCorpse(corpse);
+  }
+
+  canAddCorpseItem(corpseId: string, item: ItemDefinition): boolean | null {
+    const corpse = this.corpsesById.get(corpseId);
+
+    if (!corpse) {
+      return null;
+    }
+
+    if (item.stackable && corpse.items.some((corpseItem) => corpseItem.itemKey === item.itemKey)) {
+      return true;
+    }
+
+    return corpse.items.length < CORPSE_SLOT_CAPACITY;
+  }
+
   restoreCorpseItem(corpseId: string, item: CorpseItem): Corpse | null {
     const corpse = this.corpsesById.get(corpseId);
 
@@ -378,8 +513,10 @@ export class WorldStateService {
 
     if (existingItem) {
       existingItem.quantity += item.quantity;
-    } else {
+    } else if (corpse.items.length < CORPSE_SLOT_CAPACITY) {
       corpse.items.push({ ...item });
+    } else {
+      return null;
     }
 
     corpse.isEmpty = false;

@@ -26,8 +26,28 @@ This document defines the multiplayer world events used by the browser client an
   - Purpose: Request corpse contents. The server verifies authentication, world join state, corpse existence, and direct contact.
 - `corpse:take-item`
   - Payload: `CorpseTakeItemRequest`
-  - Shape: `{ corpseId: string; corpseItemId: string; quantity: number }`
-  - Purpose: Request taking loot from a corpse. The client never sends item keys, names, or trusted quantities beyond the requested amount.
+  - Shape: `{ corpseId: string; corpseItemId: string; quantity: number; target?: InventoryMoveTarget }`
+  - Purpose: Request taking loot from a corpse, optionally into a specific backpack slot or equipment slot. The client never sends item keys, names, or trusted quantities beyond the requested amount.
+- `corpse:add-item`
+  - Payload: `CorpseAddItemRequest`
+  - Shape: `{ corpseId: string; itemId: string }`
+  - Purpose: Request moving an owned item instance into an open corpse container. The server validates ownership, corpse existence, direct contact, and the corpse's 8-slot capacity.
+- `corpse:drop-item`
+  - Payload: `CorpseDropItemRequest`
+  - Shape: `{ corpseId: string; corpseItemId: string; quantity: number; position: Position }`
+  - Purpose: Request moving loot from a corpse to a target ground tile. The server validates direct corpse contact, loot existence, requested quantity, target range, line of sight, and walkability.
+- `inventory:drop-item`
+  - Payload: `InventoryDropItemRequest`
+  - Shape: `{ itemId: string; position: Position }`
+  - Purpose: Request dropping an owned item instance on a target ground tile. The server validates that the tile is walkable, within 5 SQM, and has line of sight from the character.
+- `ground-item:take`
+  - Payload: `GroundItemTakeRequest`
+  - Shape: `{ groundItemId: string; target?: InventoryMoveTarget }`
+  - Purpose: Request picking up an in-memory ground item, optionally into a specific backpack slot or equipment slot. The server validates world join state, item existence, 5 SQM range, line of sight, and the target.
+- `ground-item:move`
+  - Payload: `GroundItemMoveRequest`
+  - Shape: `{ groundItemId: string; position: Position }`
+  - Purpose: Request moving an in-memory ground item to another ground tile. The server validates 5 SQM range and line of sight to both the item and target tile.
 
 ## Server to Client
 
@@ -47,6 +67,10 @@ This document defines the multiplayer world events used by the browser client an
   - Payload: `WorldCorpsesEvent`
   - Shape: `{ corpses: Corpse[] }`
   - Purpose: Send current in-memory corpses after world join.
+- `world:ground-items`
+  - Payload: `WorldGroundItemsEvent`
+  - Shape: `{ groundItems: GroundItem[] }`
+  - Purpose: Send current in-memory ground items after world join.
 - `player:joined`
   - Payload: `PlayerJoinedEvent`
   - Shape: `{ player: WorldPlayer }`
@@ -94,19 +118,51 @@ This document defines the multiplayer world events used by the browser client an
 - `corpse:updated`
   - Payload: `CorpseUpdatedEvent`
   - Shape: `{ corpse: Corpse }`
-  - Purpose: Update corpse contents or empty state after loot is taken.
+  - Purpose: Update corpse contents or empty state after loot is taken, moved to a target container, or dropped to the ground.
 - `corpse:error`
   - Payload: `CorpseErrorEvent`
   - Shape: `{ message: string; code?: string }`
   - Purpose: Report corpse interaction errors such as being too far away or the corpse being gone.
+- `ground-item:created`
+  - Payload: `GroundItemCreatedEvent`
+  - Shape: `{ groundItem: GroundItem }`
+  - Purpose: Broadcast a newly dropped or restored ground item.
+- `ground-item:removed`
+  - Payload: `GroundItemRemovedEvent`
+  - Shape: `{ groundItemId: string }`
+  - Purpose: Remove a picked-up ground item from clients.
+- `ground-item:error`
+  - Payload: `GroundItemErrorEvent`
+  - Shape: `{ message: string; code?: string }`
+  - Purpose: Report ground item pickup errors such as being too far away or having no backpack space.
 - `inventory:updated`
   - Payload: `InventoryUpdatedEvent`
-  - Shape: `{ items: InventoryItem[]; message?: string }`
-  - Purpose: Send the current persisted inventory to the owning player after world join or loot transfer.
+  - Shape: `{ items: InventorySlot[]; message?: string }`
+  - Purpose: Synchronize the selected character's carried inventory state after world join, loot transfer, movement, equip, or unequip. Visible backpack windows are opened and refreshed through container events.
 - `inventory:error`
   - Payload: `InventoryErrorEvent`
   - Shape: `{ message: string; code?: string }`
-  - Purpose: Report inventory write errors.
+  - Purpose: Report inventory move and write errors.
+- `equipment:updated`
+  - Payload: `EquipmentUpdatedEvent`
+  - Shape: `{ slots: EquipmentSlotState[]; message?: string }`
+  - Purpose: Fully synchronize persisted equipment slots after world join, move, equip, unequip, or loot changes.
+- `equipment:error`
+  - Payload: `EquipmentErrorEvent`
+  - Shape: `{ message: string; code?: string }`
+  - Purpose: Report invalid equip or unequip requests.
+- `container:opened`
+  - Payload: `ContainerOpenedEvent`
+  - Shape: `{ container: InventoryItem; slots: InventorySlot[]; message?: string }`
+  - Purpose: Fully synchronize a requested backpack or container window after server validation.
+- `container:updated`
+  - Payload: `ContainerUpdatedEvent`
+  - Shape: `{ container: InventoryItem; slots: InventorySlot[]; message?: string }`
+  - Purpose: Keep an opened backpack or container synchronized after any inventory action changes it.
+- `container:error`
+  - Payload: `ContainerErrorEvent`
+  - Shape: `{ message: string; code?: string }`
+  - Purpose: Report invalid container open or move requests.
 - `character:experience-updated`
   - Payload: `CharacterExperienceUpdatedEvent`
   - Shape: `{ characterId: string; experience: number; gainedExperience: number; level: number; health: number; maxHealth: number; mana: number; maxMana: number }`
@@ -141,9 +197,11 @@ This document defines the multiplayer world events used by the browser client an
 - Socket connections are authenticated with the same JWT token used by the REST API.
 - The server keeps live world positions, monster state, and corpse state in memory.
 - Character position is persisted only when a joined socket disconnects, not on every movement step.
-- Corpse interaction requires direct contact: same tile or any adjacent tile, including diagonals.
-- Monster loot is rolled by the server into corpse contents. Items do not drop directly on the ground.
+- Corpse interaction requires direct contact: same tile or any adjacent tile, including diagonals. Moving corpse loot to ground also requires the target tile to be within 5 SQM and in line of sight.
+- Monster loot is rolled by the server into corpse contents. Monster corpses have 8 slots; stackable items can merge into an existing matching stack. Player-dropped items become in-memory ground items.
 - Corpse contents decay in memory. Normal corpses last 120 seconds; empty corpses decay after 15 seconds.
-- Character inventory is persisted to PostgreSQL. Stackable items merge into an existing character item row with the same `itemKey`; non-stackable items create separate rows.
-- Character inventory currently has 10 fixed slots. Adding a new item row fails when all slots are occupied, while stackable items already present can still merge into their existing row.
-- Monsters and corpses are not persisted to PostgreSQL yet. Character experience, level, health, max health, mana, max mana, and inventory are persisted when they change.
+- Character inventory is persisted to PostgreSQL. Each `CharacterItem` row is an item instance with a root, container, or equipment location.
+- The visible carried inventory is the equipped backpack. Basic backpacks are equippable containers with 20 slots, and containers can hold other containers when nested movement is valid.
+- If no backpack is equipped, corpse loot is accepted only when it can be equipped directly into an empty compatible equipment slot.
+- Stackable items merge only in the same root or container location with the same `itemKey`; non-stackable items remain separate instances.
+- Monsters, corpses, and ground items are not persisted to PostgreSQL yet. Character experience, level, health, max health, mana, max mana, and inventory are persisted when they change.

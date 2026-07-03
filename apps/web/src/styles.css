@@ -747,7 +747,7 @@ p {
   gap: 0.45rem;
 }
 
-.equipment-slot {
+.equipment-grid .game-inventory-bar__item {
   display: grid;
   min-height: 2.65rem;
   place-items: center;
@@ -759,6 +759,10 @@ p {
   color: rgba(68, 45, 31, 0.78);
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.equipment-grid .game-inventory-bar__item span {
+  text-align: center;
 }
 
 .game-inventory-bar {
@@ -813,6 +817,17 @@ p {
   list-style: none;
 }
 
+.game-inventory-bar__items--backpack {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.game-inventory-bar__empty-copy {
+  margin: 0;
+  color: rgba(68, 45, 31, 0.68);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .game-inventory-bar__item {
   display: flex;
   min-width: 0;
@@ -824,12 +839,20 @@ p {
   border-radius: 0.4rem;
   padding: 0.35rem 0.45rem;
   background: rgba(255, 250, 242, 0.28);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-drag: element;
+}
+
+.game-inventory-bar__item:active {
+  cursor: grabbing;
 }
 
 .game-inventory-bar__item span {
   min-width: 0;
   overflow: hidden;
   font-weight: 700;
+  pointer-events: none;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -842,6 +865,7 @@ p {
   padding: 0.1rem 0.35rem;
   background: rgba(255, 250, 242, 0.4);
   color: #5b381d;
+  pointer-events: none;
   text-align: center;
 }
 
@@ -850,6 +874,17 @@ p {
   border-style: dashed;
   background: rgba(72, 45, 25, 0.08);
   color: rgba(68, 45, 31, 0.58);
+  cursor: default;
+}
+
+.game-inventory-bar__item--valid-target {
+  border-color: rgba(43, 112, 70, 0.9);
+  background: rgba(87, 154, 94, 0.22);
+}
+
+.game-inventory-bar__item--invalid-target {
+  border-color: rgba(142, 45, 36, 0.9);
+  background: rgba(162, 66, 48, 0.2);
 }
 
 .game-inventory-bar__item--empty span {
@@ -865,6 +900,39 @@ p {
   gap: 0.4rem;
   overflow-x: auto;
   padding-top: 0.25rem;
+}
+
+.backpack-window-row {
+  display: flex;
+  width: 100%;
+  align-items: flex-start;
+  gap: 0.4rem;
+  overflow-x: auto;
+  padding-top: 0.25rem;
+}
+
+.backpack-window {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 min(22rem, 100%);
+  width: min(22rem, 100%);
+  border: 1px solid rgba(72, 45, 25, 0.95);
+  border-radius: 0.55rem;
+  padding: 0.7rem;
+  background:
+    linear-gradient(180deg, rgba(255, 250, 238, 0.26), rgba(255, 250, 238, 0.08)),
+    linear-gradient(180deg, #e4d1ac 0%, #b99364 100%);
+  color: var(--ink);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.34);
+}
+
+.backpack-window__items {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
 }
 
 .loot-window {

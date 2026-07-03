@@ -4,13 +4,26 @@ import type {
   CharacterLevelUpEvent,
   CombatErrorEvent,
   CombatStoppedEvent,
+  ContainerCloseRequest,
+  ContainerErrorEvent,
+  ContainerOpenRequest,
   CorpseCreatedEvent,
   CorpseErrorEvent,
+  CorpseAddItemRequest,
+  CorpseDropItemRequest,
   CorpseOpenRequest,
   CorpseRemovedEvent,
   CorpseTakeItemRequest,
   CorpseUpdatedEvent,
+  EquipmentErrorEvent,
+  GroundItemErrorEvent,
+  GroundItemMoveRequest,
+  GroundItemTakeRequest,
   InventoryErrorEvent,
+  InventoryDropItemRequest,
+  InventoryEquipItemRequest,
+  InventoryMoveItemRequest,
+  InventoryUnequipItemRequest,
   InventoryUpdatedEvent,
   MonsterDamagedEvent,
   MonsterDiedEvent,
@@ -24,6 +37,7 @@ import type {
   WorldClientToServerEvents,
   WorldCorpsesEvent,
   WorldErrorEvent,
+  WorldGroundItemsEvent,
   WorldJoinRequest,
   WorldJoinedEvent,
   WorldMonstersEvent,
@@ -34,6 +48,7 @@ import {
   createLocalMap,
   getMovementCooldownMs,
   getNextPosition,
+  getTileType,
   isMoveDirection,
   isWalkableTile,
   resolveLocalPlayerSpawn,
@@ -53,7 +68,7 @@ import { Server, Socket } from "socket.io";
 
 import type { AuthenticatedUser } from "./auth/authenticated-user.interface";
 import { AuthService } from "./auth/auth.service";
-import { CharactersService, InventoryFullError } from "./characters/characters.service";
+import { CharactersService, InventoryFullError, InventoryValidationError } from "./characters/characters.service";
 import { WorldStateService } from "./world-state.service";
 
 interface WorldSocketData {
@@ -72,6 +87,7 @@ const MONSTER_THINK_INTERVAL_MS = 700;
 const PLAYER_ATTACK_INTERVAL_MS = 1200;
 const RESPAWN_WARNING_MS = 3000;
 const EMPTY_CORPSE_DECAY_MS = 15000;
+const ITEM_THROW_RANGE = 5;
 
 type WorldSocket = Socket<
   WorldClientToServerEvents,
@@ -99,8 +115,12 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   private readonly localMap = createLocalMap();
   private readonly combatSessions = new Map<string, CombatSession>();
   private readonly corpseDecayTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly lockedCorpseIds = new Set<string>();
+  private readonly lockedCorpseItemKeys = new Set<string>();
+  private readonly lockedGroundItemIds = new Set<string>();
   private readonly nextPlayerAttackAtBySocketId = new Map<string, number>();
   private readonly nextPlayerMoveAtBySocketId = new Map<string, number>();
+  private readonly openedContainerIdsBySocketId = new Map<string, Set<string>>();
   private monsterThinkTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -136,6 +156,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     this.stopCombatSession(client, "disconnected", false);
     this.nextPlayerAttackAtBySocketId.delete(client.id);
     this.nextPlayerMoveAtBySocketId.delete(client.id);
+    this.openedContainerIdsBySocketId.delete(client.id);
 
     const removedPlayer = this.worldStateService.removePlayer(client.id);
 
@@ -188,6 +209,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       this.worldStateService.removePlayer(client.id);
       this.nextPlayerAttackAtBySocketId.delete(client.id);
       this.nextPlayerMoveAtBySocketId.delete(client.id);
+      this.openedContainerIdsBySocketId.delete(client.id);
       await this.charactersService.savePositionForUserCharacter(
         previousPlayer.userId,
         previousPlayer.characterId,
@@ -229,15 +251,23 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       const corpsesPayload: WorldCorpsesEvent = {
         corpses: this.worldStateService.listCorpses()
       };
+      const groundItemsPayload: WorldGroundItemsEvent = {
+        groundItems: this.worldStateService.listGroundItems()
+      };
       const inventoryPayload: InventoryUpdatedEvent = {
         items: await this.charactersService.listInventoryForUserCharacter(user.id, character.id)
+      };
+      const equipmentPayload = {
+        slots: await this.charactersService.listEquipmentForUserCharacter(user.id, character.id)
       };
 
       client.emit(worldEventNames.worldJoined, joinedPayload);
       client.emit(worldEventNames.worldPlayers, playersPayload);
       client.emit(worldEventNames.worldMonsters, monstersPayload);
       client.emit(worldEventNames.worldCorpses, corpsesPayload);
+      client.emit(worldEventNames.worldGroundItems, groundItemsPayload);
       client.emit(worldEventNames.inventoryUpdated, inventoryPayload);
+      client.emit(worldEventNames.equipmentUpdated, equipmentPayload);
       client.broadcast.emit(worldEventNames.playerJoined, {
         player: worldPlayer
       });
@@ -432,54 +462,194 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
-    const corpse = this.worldStateService.getCorpse(corpseId);
+    const corpseItemLockKey = this.getCorpseItemLockKey(corpseId, corpseItemId);
 
-    if (!corpse) {
-      this.emitCorpseError(client, "That corpse is gone.", "corpse_not_found");
-      return;
-    }
-
-    if (!this.isInDirectContact(activePlayer.position, corpse)) {
-      this.emitCorpseError(client, "You need to stand on the corpse tile or on any adjacent tile.", "corpse_too_far");
-      return;
-    }
-
-    const corpseItem = corpse.items.find((item) => item.corpseItemId === corpseItemId);
-
-    if (!corpseItem) {
-      this.emitCorpseError(client, "That loot is no longer in the corpse.", "corpse_item_not_found");
-      return;
-    }
-
-    if (quantity > corpseItem.quantity) {
-      this.emitCorpseError(client, "That corpse does not contain that many items.", "invalid_quantity");
-      return;
-    }
-
-    const takeResult = this.worldStateService.takeCorpseItem(corpse.id, corpseItem.corpseItemId, quantity);
-
-    if (!takeResult) {
-      this.emitCorpseError(client, "That loot is no longer in the corpse.", "corpse_item_not_found");
+    if (!this.tryLockCorpseItem(corpseItemLockKey)) {
+      this.emitCorpseError(client, "That loot is already being moved.", "corpse_item_busy");
       return;
     }
 
     try {
-      const inventoryItems = await this.charactersService.addItemToInventoryForUserCharacter(
-        user.id,
-        activePlayer.characterId,
-        {
-          itemKey: takeResult.item.itemKey,
-          name: takeResult.item.name,
-          stackable: takeResult.item.stackable
-        },
-        takeResult.item.quantity
-      );
+      const corpse = this.worldStateService.getCorpse(corpseId);
 
-      client.emit(worldEventNames.inventoryUpdated, {
-        items: inventoryItems,
-        message: `Took ${takeResult.item.quantity} ${takeResult.item.name}.`
+      if (!corpse) {
+        this.emitCorpseError(client, "That corpse is gone.", "corpse_not_found");
+        return;
+      }
+
+      if (!this.isInDirectContact(activePlayer.position, corpse)) {
+        this.emitCorpseError(client, "You need to stand on the corpse tile or on any adjacent tile.", "corpse_too_far");
+        return;
+      }
+
+      const corpseItem = corpse.items.find((item) => item.corpseItemId === corpseItemId);
+
+      if (!corpseItem) {
+        this.emitCorpseError(client, "That loot is no longer in the corpse.", "corpse_item_not_found");
+        return;
+      }
+
+      if (quantity > corpseItem.quantity) {
+        this.emitCorpseError(client, "That corpse does not contain that many items.", "invalid_quantity");
+        return;
+      }
+
+      const takeResult = this.worldStateService.takeCorpseItem(corpse.id, corpseItem.corpseItemId, quantity);
+
+      if (!takeResult) {
+        this.emitCorpseError(client, "That loot is no longer in the corpse.", "corpse_item_not_found");
+        return;
+      }
+
+      try {
+        if (payload.target) {
+          await this.charactersService.addGroundItemToTargetForUserCharacter(
+            user.id,
+            activePlayer.characterId,
+            takeResult.item,
+            takeResult.item.quantity,
+            payload.target
+          );
+        } else {
+          await this.charactersService.addItemToInventoryForUserCharacter(
+            user.id,
+            activePlayer.characterId,
+            {
+              itemKey: takeResult.item.itemKey,
+              name: takeResult.item.name,
+              stackable: takeResult.item.stackable,
+              itemType: takeResult.item.itemType,
+              compatibleEquipmentSlots: takeResult.item.compatibleEquipmentSlots,
+              isContainer: takeResult.item.isContainer,
+              containerSize: takeResult.item.containerSize
+            },
+            takeResult.item.quantity
+          );
+        }
+
+        await this.emitInventoryState(client, user.id, activePlayer.characterId, `Took ${takeResult.item.quantity} ${takeResult.item.name}.`);
+
+        client.emit(worldEventNames.corpseUpdated, {
+          corpse: takeResult.corpse
+        });
+        this.server.emit(worldEventNames.corpseUpdated, {
+          corpse: takeResult.corpse
+        });
+
+        if (takeResult.corpse.isEmpty) {
+          this.scheduleCorpseDecay(takeResult.corpse.id, EMPTY_CORPSE_DECAY_MS);
+        }
+      } catch (error) {
+        const restoredCorpse = this.worldStateService.restoreCorpseItem(corpse.id, takeResult.item);
+        if (restoredCorpse) {
+          this.server.emit(worldEventNames.corpseUpdated, {
+            corpse: restoredCorpse
+          });
+        }
+        if (error instanceof InventoryFullError) {
+          this.emitInventoryError(client, "Your inventory is full.", "inventory_full");
+          return;
+        }
+        if (error instanceof InventoryValidationError) {
+          this.emitInventoryError(client, error.message, error.code);
+          return;
+        }
+        this.logger.warn(`Failed to take corpse item for socket ${client.id}: ${error instanceof Error ? error.message : "unknown error"}`);
+        this.emitInventoryError(client, "The item could not be added to your inventory.", "inventory_update_failed");
+      }
+    } finally {
+      this.releaseCorpseItemLock(corpseItemLockKey);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.corpseDropItem)
+  async handleCorpseDropItem(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: CorpseDropItemRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitCorpseError(client, "Join the world before moving loot.", "world_join_required");
+      return;
+    }
+
+    const corpseId = payload?.corpseId?.trim();
+    const corpseItemId = payload?.corpseItemId?.trim();
+    const quantity = Math.floor(payload?.quantity ?? 0);
+    const targetPosition = this.normalizeDropPosition(payload?.position);
+
+    if (!corpseId || !corpseItemId || !targetPosition) {
+      this.emitCorpseError(client, "A corpse item and valid drop tile are required.", "invalid_corpse_drop_request");
+      return;
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      this.emitCorpseError(client, "Loot quantity is invalid.", "invalid_quantity");
+      return;
+    }
+
+    if (!this.isWithinItemThrowRange(activePlayer.position, targetPosition)) {
+      this.emitCorpseError(client, "You can only drop loot up to 5 SQM away.", "corpse_drop_tile_too_far");
+      return;
+    }
+
+    if (!this.hasLineOfSight(activePlayer.position, targetPosition)) {
+      this.emitCorpseError(client, "A wall blocks that throw.", "corpse_drop_line_blocked");
+      return;
+    }
+
+    if (!isWalkableTile(this.localMap, targetPosition)) {
+      this.emitCorpseError(client, "Loot cannot be dropped there.", "corpse_drop_tile_blocked");
+      return;
+    }
+
+    const corpseItemLockKey = this.getCorpseItemLockKey(corpseId, corpseItemId);
+
+    if (!this.tryLockCorpseItem(corpseItemLockKey)) {
+      this.emitCorpseError(client, "That loot is already being moved.", "corpse_item_busy");
+      return;
+    }
+
+    try {
+      const corpse = this.worldStateService.getCorpse(corpseId);
+
+      if (!corpse) {
+        this.emitCorpseError(client, "That corpse is gone.", "corpse_not_found");
+        return;
+      }
+
+      if (!this.isInDirectContact(activePlayer.position, corpse)) {
+        this.emitCorpseError(client, "You need to stand on the corpse tile or on any adjacent tile.", "corpse_too_far");
+        return;
+      }
+
+      const corpseItem = corpse.items.find((item) => item.corpseItemId === corpseItemId);
+
+      if (!corpseItem) {
+        this.emitCorpseError(client, "That loot is no longer in the corpse.", "corpse_item_not_found");
+        return;
+      }
+
+      if (quantity > corpseItem.quantity) {
+        this.emitCorpseError(client, "That corpse does not contain that many items.", "invalid_quantity");
+        return;
+      }
+
+      const takeResult = this.worldStateService.takeCorpseItem(corpse.id, corpseItem.corpseItemId, quantity);
+
+      if (!takeResult) {
+        this.emitCorpseError(client, "That loot is no longer in the corpse.", "corpse_item_not_found");
+        return;
+      }
+
+      const { corpseItemId: _corpseItemId, ...groundDropItem } = takeResult.item;
+      const groundItem = this.worldStateService.createGroundItem(groundDropItem, targetPosition);
+
+      this.server.emit(worldEventNames.groundItemCreated, {
+        groundItem
       });
-
       client.emit(worldEventNames.corpseUpdated, {
         corpse: takeResult.corpse
       });
@@ -490,20 +660,427 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       if (takeResult.corpse.isEmpty) {
         this.scheduleCorpseDecay(takeResult.corpse.id, EMPTY_CORPSE_DECAY_MS);
       }
-    } catch (error) {
-      const restoredCorpse = this.worldStateService.restoreCorpseItem(corpse.id, takeResult.item);
-      if (restoredCorpse) {
-        this.server.emit(worldEventNames.corpseUpdated, {
-          corpse: restoredCorpse
-        });
-      }
-      if (error instanceof InventoryFullError) {
-        this.emitInventoryError(client, "Your inventory is full.", "inventory_full");
+    } finally {
+      this.releaseCorpseItemLock(corpseItemLockKey);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.corpseAddItem)
+  async handleCorpseAddItem(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: CorpseAddItemRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitCorpseError(client, "Join the world before moving items into corpses.", "world_join_required");
+      return;
+    }
+
+    const corpseId = payload?.corpseId?.trim();
+    const itemId = payload?.itemId?.trim();
+
+    if (!corpseId || !itemId) {
+      this.emitCorpseError(client, "A corpse and item id are required.", "invalid_corpse_item_request");
+      return;
+    }
+
+    if (!this.tryLockCorpse(corpseId)) {
+      this.emitCorpseError(client, "That corpse is already being updated.", "corpse_busy");
+      return;
+    }
+
+    try {
+      const corpse = this.worldStateService.getCorpse(corpseId);
+
+      if (!corpse) {
+        this.emitCorpseError(client, "That corpse is gone.", "corpse_not_found");
         return;
       }
-      this.logger.warn(`Failed to take corpse item for socket ${client.id}: ${error instanceof Error ? error.message : "unknown error"}`);
-      this.emitInventoryError(client, "The item could not be added to your inventory.", "inventory_update_failed");
+
+      if (!this.isInDirectContact(activePlayer.position, corpse)) {
+        this.emitCorpseError(client, "You need to stand on the corpse tile or on any adjacent tile.", "corpse_too_far");
+        return;
+      }
+
+      const inspectedItem = await this.charactersService.inspectDroppableItemForUserCharacter(user.id, activePlayer.characterId, itemId);
+      const canAddItem = this.worldStateService.canAddCorpseItem(corpse.id, inspectedItem);
+
+      if (canAddItem === null) {
+        this.emitCorpseError(client, "That corpse is gone.", "corpse_not_found");
+        return;
+      }
+
+      if (!canAddItem) {
+        this.emitCorpseError(client, "That corpse is full.", "corpse_full");
+        return;
+      }
+
+      const droppedItem = await this.charactersService.removeItemForGroundDrop(user.id, activePlayer.characterId, itemId);
+      const updatedCorpse = this.worldStateService.addCorpseItem(corpse.id, droppedItem);
+
+      if (!updatedCorpse) {
+        this.emitCorpseError(client, "That corpse cannot hold that item.", "corpse_add_failed");
+        return;
+      }
+
+      await this.emitInventoryState(client, user.id, activePlayer.characterId, `Moved ${droppedItem.name} into the corpse.`);
+      client.emit(worldEventNames.corpseUpdated, {
+        corpse: updatedCorpse
+      });
+      this.server.emit(worldEventNames.corpseUpdated, {
+        corpse: updatedCorpse
+      });
+    } catch (error) {
+      this.emitInventoryOperationError(client, error);
+    } finally {
+      this.releaseCorpseLock(corpseId);
     }
+  }
+
+  @SubscribeMessage(worldEventNames.inventoryMoveItem)
+  async handleInventoryMoveItem(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: InventoryMoveItemRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitInventoryError(client, "Join the world before moving items.", "world_join_required");
+      return;
+    }
+
+    const itemId = payload?.itemId?.trim();
+
+    if (!itemId || !payload?.target) {
+      this.emitInventoryError(client, "An item and target are required.", "invalid_inventory_move");
+      return;
+    }
+
+    try {
+      await this.charactersService.moveItemForUserCharacter(user.id, activePlayer.characterId, itemId, payload.target);
+      await this.emitInventoryState(client, user.id, activePlayer.characterId, "Inventory updated.");
+    } catch (error) {
+      this.emitInventoryOperationError(client, error);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.inventoryEquipItem)
+  async handleInventoryEquipItem(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: InventoryEquipItemRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitEquipmentError(client, "Join the world before equipping items.", "world_join_required");
+      return;
+    }
+
+    const itemId = payload?.itemId?.trim();
+
+    if (!itemId) {
+      this.emitEquipmentError(client, "An item id is required.", "invalid_item_id");
+      return;
+    }
+
+    try {
+      await this.charactersService.equipItemForUserCharacter(user.id, activePlayer.characterId, itemId, payload.equipmentSlot);
+      await this.emitInventoryState(client, user.id, activePlayer.characterId, "Equipment updated.");
+    } catch (error) {
+      this.emitEquipmentOperationError(client, error);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.inventoryUnequipItem)
+  async handleInventoryUnequipItem(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: InventoryUnequipItemRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitEquipmentError(client, "Join the world before unequipping items.", "world_join_required");
+      return;
+    }
+
+    if (!payload?.equipmentSlot) {
+      this.emitEquipmentError(client, "An equipment slot is required.", "invalid_equipment_slot");
+      return;
+    }
+
+    try {
+      await this.charactersService.unequipItemForUserCharacter(user.id, activePlayer.characterId, payload.equipmentSlot, payload.target);
+      await this.emitInventoryState(client, user.id, activePlayer.characterId, "Equipment updated.");
+    } catch (error) {
+      this.emitEquipmentOperationError(client, error);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.inventoryDropItem)
+  async handleInventoryDropItem(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: InventoryDropItemRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitInventoryError(client, "Join the world before dropping items.", "world_join_required");
+      return;
+    }
+
+    const itemId = payload?.itemId?.trim();
+    const targetPosition = this.normalizeDropPosition(payload?.position);
+
+    if (!itemId) {
+      this.emitInventoryError(client, "An item id is required.", "invalid_item_id");
+      return;
+    }
+
+    if (!targetPosition) {
+      this.emitInventoryError(client, "A valid drop tile is required.", "invalid_drop_position");
+      return;
+    }
+
+    if (!this.isWithinItemThrowRange(activePlayer.position, targetPosition)) {
+      this.emitInventoryError(client, "You can only drop items up to 5 SQM away.", "drop_tile_too_far");
+      return;
+    }
+
+    if (!this.hasLineOfSight(activePlayer.position, targetPosition)) {
+      this.emitInventoryError(client, "A wall blocks that throw.", "drop_line_blocked");
+      return;
+    }
+
+    if (!isWalkableTile(this.localMap, targetPosition)) {
+      this.emitInventoryError(client, "Items cannot be dropped there.", "drop_tile_blocked");
+      return;
+    }
+
+    try {
+      const droppedItem = await this.charactersService.removeItemForGroundDrop(user.id, activePlayer.characterId, itemId);
+      const groundItem = this.worldStateService.createGroundItem(droppedItem, targetPosition);
+
+      this.server.emit(worldEventNames.groundItemCreated, {
+        groundItem
+      });
+      await this.emitInventoryState(client, user.id, activePlayer.characterId, `Dropped ${droppedItem.name}.`);
+    } catch (error) {
+      this.emitInventoryOperationError(client, error);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.groundItemMove)
+  handleGroundItemMove(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: GroundItemMoveRequest
+  ): void {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitGroundItemError(client, "Join the world before moving ground items.", "world_join_required");
+      return;
+    }
+
+    const groundItemId = payload?.groundItemId?.trim();
+    const targetPosition = this.normalizeDropPosition(payload?.position);
+
+    if (!groundItemId || !targetPosition) {
+      this.emitGroundItemError(client, "A ground item and valid tile are required.", "invalid_ground_item_move");
+      return;
+    }
+
+    if (!this.tryLockGroundItem(groundItemId)) {
+      this.emitGroundItemError(client, "That item is already being moved.", "ground_item_busy");
+      return;
+    }
+
+    try {
+      const groundItem = this.worldStateService.getGroundItem(groundItemId);
+
+      if (!groundItem) {
+        this.emitGroundItemError(client, "That item is no longer on the ground.", "ground_item_not_found");
+        return;
+      }
+
+      if (!this.isInDirectContact(activePlayer.position, groundItem)) {
+        this.emitGroundItemError(client, "Stand on or next to the item before moving it.", "ground_item_too_far");
+        return;
+      }
+
+      if (!this.isWithinItemThrowRange(activePlayer.position, targetPosition)) {
+        this.emitGroundItemError(client, "You can only move ground items up to 5 SQM away.", "ground_item_target_too_far");
+        return;
+      }
+
+      if (!this.hasLineOfSight(activePlayer.position, groundItem) || !this.hasLineOfSight(activePlayer.position, targetPosition)) {
+        this.emitGroundItemError(client, "A wall blocks that movement.", "ground_item_line_blocked");
+        return;
+      }
+
+      if (!isWalkableTile(this.localMap, targetPosition)) {
+        this.emitGroundItemError(client, "Items cannot be moved there.", "ground_item_tile_blocked");
+        return;
+      }
+
+      const movedGroundItem = this.worldStateService.moveGroundItem(groundItem.id, targetPosition);
+
+      if (!movedGroundItem) {
+        this.emitGroundItemError(client, "That item is no longer on the ground.", "ground_item_not_found");
+        return;
+      }
+
+      this.server.emit(worldEventNames.groundItemCreated, {
+        groundItem: movedGroundItem
+      });
+    } finally {
+      this.releaseGroundItemLock(groundItemId);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.groundItemTake)
+  async handleGroundItemTake(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: GroundItemTakeRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitGroundItemError(client, "Join the world before taking ground items.", "world_join_required");
+      return;
+    }
+
+    const groundItemId = payload?.groundItemId?.trim();
+
+    if (!groundItemId) {
+      this.emitGroundItemError(client, "A ground item id is required.", "invalid_ground_item_id");
+      return;
+    }
+
+    if (!this.tryLockGroundItem(groundItemId)) {
+      this.emitGroundItemError(client, "That item is already being moved.", "ground_item_busy");
+      return;
+    }
+
+    try {
+      const groundItem = this.worldStateService.getGroundItem(groundItemId);
+
+      if (!groundItem) {
+        this.emitGroundItemError(client, "That item is no longer on the ground.", "ground_item_not_found");
+        return;
+      }
+
+      if (!this.isWithinItemThrowRange(activePlayer.position, groundItem)) {
+        this.emitGroundItemError(client, "You need to be within 5 SQM of that item.", "ground_item_too_far");
+        return;
+      }
+
+      if (!this.hasLineOfSight(activePlayer.position, groundItem)) {
+        this.emitGroundItemError(client, "A wall blocks that item.", "ground_item_line_blocked");
+        return;
+      }
+
+      const takenGroundItem = this.worldStateService.takeGroundItem(groundItem.id);
+
+      if (!takenGroundItem) {
+        this.emitGroundItemError(client, "That item is no longer on the ground.", "ground_item_not_found");
+        return;
+      }
+
+      try {
+        if (payload.target) {
+          await this.charactersService.addGroundItemToTargetForUserCharacter(
+            user.id,
+            activePlayer.characterId,
+            takenGroundItem,
+            takenGroundItem.quantity,
+            payload.target
+          );
+        } else {
+          await this.charactersService.addItemToInventoryForUserCharacter(
+            user.id,
+            activePlayer.characterId,
+            takenGroundItem,
+            takenGroundItem.quantity
+          );
+        }
+
+        this.server.emit(worldEventNames.groundItemRemoved, {
+          groundItemId: takenGroundItem.id
+        });
+        await this.emitInventoryState(client, user.id, activePlayer.characterId, `Picked up ${takenGroundItem.name}.`);
+      } catch (error) {
+        const restoredGroundItem = this.worldStateService.restoreGroundItem(takenGroundItem);
+        this.server.emit(worldEventNames.groundItemCreated, {
+          groundItem: restoredGroundItem
+        });
+
+        if (error instanceof InventoryFullError) {
+          this.emitGroundItemError(client, "Your backpack is full.", "inventory_full");
+          return;
+        }
+
+        if (error instanceof InventoryValidationError) {
+          this.emitGroundItemError(client, error.message, error.code);
+          return;
+        }
+
+        this.logger.warn(`Failed to take ground item for socket ${client.id}: ${error instanceof Error ? error.message : "unknown error"}`);
+        this.emitGroundItemError(client, "The item could not be picked up.", "ground_item_take_failed");
+      }
+    } finally {
+      this.releaseGroundItemLock(groundItemId);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.containerOpen)
+  async handleContainerOpen(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: ContainerOpenRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitContainerError(client, "Join the world before opening containers.", "world_join_required");
+      return;
+    }
+
+    const containerItemId = payload?.containerItemId?.trim();
+
+    if (!containerItemId) {
+      this.emitContainerError(client, "A container id is required.", "invalid_container_id");
+      return;
+    }
+
+    try {
+      const containerState = await this.charactersService.openContainerForUserCharacter(user.id, activePlayer.characterId, containerItemId);
+      this.getOpenedContainerIds(client.id).add(containerItemId);
+      client.emit(worldEventNames.containerOpened, containerState);
+    } catch (error) {
+      this.emitContainerOperationError(client, error);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.containerClose)
+  handleContainerClose(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: ContainerCloseRequest
+  ): void {
+    const containerItemId = payload?.containerItemId?.trim();
+
+    if (!containerItemId) {
+      return;
+    }
+
+    this.openedContainerIdsBySocketId.get(client.id)?.delete(containerItemId);
   }
 
   private startCombatSession(client: WorldSocket, monsterId: string): void {
@@ -858,9 +1435,187 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     client.emit(worldEventNames.inventoryError, payload);
   }
 
+  private emitEquipmentError(client: WorldSocket, message: string, code?: string): void {
+    const payload: EquipmentErrorEvent = { message, code };
+    client.emit(worldEventNames.equipmentError, payload);
+  }
+
+  private emitContainerError(client: WorldSocket, message: string, code?: string): void {
+    const payload: ContainerErrorEvent = { message, code };
+    client.emit(worldEventNames.containerError, payload);
+  }
+
+  private emitGroundItemError(client: WorldSocket, message: string, code?: string): void {
+    const payload: GroundItemErrorEvent = { message, code };
+    client.emit(worldEventNames.groundItemError, payload);
+  }
+
   private emitCorpseError(client: WorldSocket, message: string, code?: string): void {
     const payload: CorpseErrorEvent = { message, code };
     client.emit(worldEventNames.corpseError, payload);
+  }
+
+  private async emitInventoryState(
+    client: WorldSocket,
+    userId: string,
+    characterId: string,
+    message?: string
+  ): Promise<void> {
+    client.emit(worldEventNames.inventoryUpdated, {
+      items: await this.charactersService.listInventoryForUserCharacter(userId, characterId),
+      message
+    });
+    client.emit(worldEventNames.equipmentUpdated, {
+      slots: await this.charactersService.listEquipmentForUserCharacter(userId, characterId),
+      message
+    });
+
+    await this.emitOpenedContainerStates(client, userId, characterId, message);
+  }
+
+  private async emitOpenedContainerStates(
+    client: WorldSocket,
+    userId: string,
+    characterId: string,
+    message?: string
+  ): Promise<void> {
+    const openedContainerIds = this.openedContainerIdsBySocketId.get(client.id);
+
+    if (!openedContainerIds || openedContainerIds.size === 0) {
+      return;
+    }
+
+    for (const containerItemId of Array.from(openedContainerIds)) {
+      try {
+        const containerState = await this.charactersService.openContainerForUserCharacter(userId, characterId, containerItemId);
+        client.emit(worldEventNames.containerUpdated, {
+          ...containerState,
+          message
+        });
+      } catch {
+        openedContainerIds.delete(containerItemId);
+      }
+    }
+  }
+
+  private getOpenedContainerIds(socketId: string): Set<string> {
+    const existingContainerIds = this.openedContainerIdsBySocketId.get(socketId);
+
+    if (existingContainerIds) {
+      return existingContainerIds;
+    }
+
+    const containerIds = new Set<string>();
+    this.openedContainerIdsBySocketId.set(socketId, containerIds);
+    return containerIds;
+  }
+
+  private getCorpseItemLockKey(corpseId: string, corpseItemId: string): string {
+    return `${corpseId}:${corpseItemId}`;
+  }
+
+  private tryLockCorpse(corpseId: string): boolean {
+    if (this.lockedCorpseIds.has(corpseId)) {
+      return false;
+    }
+
+    this.lockedCorpseIds.add(corpseId);
+    return true;
+  }
+
+  private releaseCorpseLock(corpseId: string): void {
+    this.lockedCorpseIds.delete(corpseId);
+  }
+
+  private tryLockCorpseItem(corpseItemLockKey: string): boolean {
+    if (this.lockedCorpseItemKeys.has(corpseItemLockKey)) {
+      return false;
+    }
+
+    this.lockedCorpseItemKeys.add(corpseItemLockKey);
+    return true;
+  }
+
+  private releaseCorpseItemLock(corpseItemLockKey: string): void {
+    this.lockedCorpseItemKeys.delete(corpseItemLockKey);
+  }
+
+  private tryLockGroundItem(groundItemId: string): boolean {
+    if (this.lockedGroundItemIds.has(groundItemId)) {
+      return false;
+    }
+
+    this.lockedGroundItemIds.add(groundItemId);
+    return true;
+  }
+
+  private releaseGroundItemLock(groundItemId: string): void {
+    this.lockedGroundItemIds.delete(groundItemId);
+  }
+
+  private emitInventoryOperationError(client: WorldSocket, error: unknown): void {
+    if (error instanceof InventoryFullError) {
+      this.emitInventoryError(client, "Your inventory is full.", "inventory_full");
+      return;
+    }
+
+    if (error instanceof InventoryValidationError) {
+      this.emitInventoryError(client, error.message, error.code);
+      return;
+    }
+
+    this.logger.warn(`Inventory operation failed for socket ${client.id}: ${error instanceof Error ? error.message : "unknown error"}`);
+    this.emitInventoryError(client, "The inventory action could not be completed.", "inventory_action_failed");
+  }
+
+  private emitEquipmentOperationError(client: WorldSocket, error: unknown): void {
+    if (error instanceof InventoryFullError) {
+      this.emitEquipmentError(client, "Your inventory is full.", "inventory_full");
+      return;
+    }
+
+    if (error instanceof InventoryValidationError) {
+      this.emitEquipmentError(client, error.message, error.code);
+      return;
+    }
+
+    this.logger.warn(`Equipment operation failed for socket ${client.id}: ${error instanceof Error ? error.message : "unknown error"}`);
+    this.emitEquipmentError(client, "The equipment action could not be completed.", "equipment_action_failed");
+  }
+
+  private emitContainerOperationError(client: WorldSocket, error: unknown): void {
+    if (error instanceof InventoryFullError) {
+      this.emitContainerError(client, "That container is full.", "container_full");
+      return;
+    }
+
+    if (error instanceof InventoryValidationError) {
+      this.emitContainerError(client, error.message, error.code);
+      return;
+    }
+
+    this.logger.warn(`Container operation failed for socket ${client.id}: ${error instanceof Error ? error.message : "unknown error"}`);
+    this.emitContainerError(client, "The container action could not be completed.", "container_action_failed");
+  }
+
+  private normalizeDropPosition(position: Partial<Position> | undefined): Position | null {
+    if (!position) {
+      return null;
+    }
+
+    const x = Number(position.x);
+    const y = Number(position.y);
+    const z = Number(position.z);
+
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+      return null;
+    }
+
+    return {
+      x: Math.round(x),
+      y: Math.round(y),
+      z: Math.round(z)
+    };
   }
 
   private isAdjacent(attacker: Position, target: Position): boolean {
@@ -869,6 +1624,48 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
   private isInDirectContact(player: Position, target: Position): boolean {
     return player.z === target.z && Math.max(Math.abs(player.x - target.x), Math.abs(player.y - target.y)) <= 1;
+  }
+
+  private isWithinItemThrowRange(player: Position, target: Position): boolean {
+    return player.z === target.z && Math.max(Math.abs(player.x - target.x), Math.abs(player.y - target.y)) <= ITEM_THROW_RANGE;
+  }
+
+  private hasLineOfSight(origin: Position, target: Position): boolean {
+    if (origin.z !== target.z) {
+      return false;
+    }
+
+    const deltaX = Math.abs(target.x - origin.x);
+    const deltaY = Math.abs(target.y - origin.y);
+    const stepX = origin.x < target.x ? 1 : -1;
+    const stepY = origin.y < target.y ? 1 : -1;
+    let error = deltaX - deltaY;
+    let x = origin.x;
+    let y = origin.y;
+
+    while (!(x === target.x && y === target.y)) {
+      const doubleError = error * 2;
+
+      if (doubleError > -deltaY) {
+        error -= deltaY;
+        x += stepX;
+      }
+
+      if (doubleError < deltaX) {
+        error += deltaX;
+        y += stepY;
+      }
+
+      if (x === target.x && y === target.y) {
+        return true;
+      }
+
+      if (getTileType(this.localMap, x, y) === "wall") {
+        return false;
+      }
+    }
+
+    return true;
   }
 
   private isWithinPursuitRange(attacker: Position, target: Position): boolean {

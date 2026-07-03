@@ -1,5 +1,5 @@
 import { getMovementCooldownMs, getMovementTweenDurationMs } from "@aldrym/shared";
-import type { Corpse, MoveDirection, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type { Corpse, GroundItem, MoveDirection, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
 import Phaser from "phaser";
 
 import {
@@ -8,17 +8,6 @@ import {
   getTileType,
   type LocalMapData
 } from "../map/localMap";
-
-interface MovementKeys {
-  downLeft?: Phaser.Input.Keyboard.Key;
-  downRight?: Phaser.Input.Keyboard.Key;
-  up?: Phaser.Input.Keyboard.Key;
-  upLeft?: Phaser.Input.Keyboard.Key;
-  upRight?: Phaser.Input.Keyboard.Key;
-  down?: Phaser.Input.Keyboard.Key;
-  left?: Phaser.Input.Keyboard.Key;
-  right?: Phaser.Input.Keyboard.Key;
-}
 
 interface PlayerView {
   container: Phaser.GameObjects.Container;
@@ -48,6 +37,16 @@ interface CorpseView {
   tooltip: Phaser.GameObjects.Text;
 }
 
+interface GroundItemView {
+  body: Phaser.GameObjects.Rectangle;
+  container: Phaser.GameObjects.Container;
+  highlight: Phaser.GameObjects.Rectangle;
+  hitArea: Phaser.GameObjects.Zone;
+  label: Phaser.GameObjects.Text;
+  quantity: Phaser.GameObjects.Text;
+  tooltip: Phaser.GameObjects.Text;
+}
+
 interface RespawnWarningView {
   container: Phaser.GameObjects.Container;
 }
@@ -55,13 +54,16 @@ interface RespawnWarningView {
 export interface MainSceneOptions {
   activeCombatMonsterId?: string | null;
   corpses: Corpse[];
+  groundItems: GroundItem[];
   initialPlayers: WorldPlayer[];
   localCharacterId: string;
   map: LocalMapData;
   monsters: WorldMonster[];
   onAttackMonster?: (monsterId: string) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
+  onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   onOpenCorpse?: (corpseId: string) => void;
+  onTakeGroundItem?: (groundItemId: string) => void;
 }
 
 const CAMERA_ZOOM = 2;
@@ -74,20 +76,25 @@ export class MainScene extends Phaser.Scene {
   private readonly map: LocalMapData;
   private readonly onAttackMonster?: (monsterId: string) => void;
   private readonly onMoveIntent?: (direction: MoveDirection) => void;
+  private readonly onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   private readonly onOpenCorpse?: (corpseId: string) => void;
-  private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
-  private movementKeys?: MovementKeys;
+  private readonly onTakeGroundItem?: (groundItemId: string) => void;
+  private readonly pressedMovementCodes = new Set<string>();
   private nextMoveAt = 0;
   private isSceneReady = false;
   private pendingCorpses: Corpse[];
+  private pendingGroundItems: GroundItem[];
   private pendingMonsters: WorldMonster[];
   private pendingPlayers: WorldPlayer[];
   private readonly corpseViews = new Map<string, CorpseView>();
+  private readonly groundItemViews = new Map<string, GroundItemView>();
   private readonly monsterViews = new Map<string, MonsterView>();
   private readonly playerViews = new Map<string, PlayerView>();
   private readonly respawnWarningTimers = new Map<string, Phaser.Time.TimerEvent>();
   private readonly respawnWarningViews = new Map<string, RespawnWarningView>();
+  private draggedGroundItemId: string | null = null;
   private hoveredCorpseId: string | null = null;
+  private hoveredGroundItemId: string | null = null;
 
   constructor(options: MainSceneOptions) {
     super({ key: "main-scene" });
@@ -96,8 +103,11 @@ export class MainScene extends Phaser.Scene {
     this.map = options.map;
     this.onAttackMonster = options.onAttackMonster;
     this.onMoveIntent = options.onMoveIntent;
+    this.onMoveGroundItem = options.onMoveGroundItem;
     this.onOpenCorpse = options.onOpenCorpse;
+    this.onTakeGroundItem = options.onTakeGroundItem;
     this.pendingCorpses = options.corpses;
+    this.pendingGroundItems = options.groundItems;
     this.pendingMonsters = options.monsters;
     this.pendingPlayers = options.initialPlayers;
   }
@@ -108,10 +118,17 @@ export class MainScene extends Phaser.Scene {
     this.configureCamera();
     this.isSceneReady = true;
     this.syncCorpses(this.pendingCorpses);
+    this.syncGroundItems(this.pendingGroundItems);
     this.syncMonsters(this.pendingMonsters);
     this.syncPlayers(this.pendingPlayers);
+    window.addEventListener("aldrym:item-drag-start", this.clearMovementInput);
+    this.input.on(Phaser.Input.Events.POINTER_UP, this.handlePointerUp, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.resetCorpseCursor());
-    this.events.once(Phaser.Scenes.Events.DESTROY, () => this.resetCorpseCursor());
+    this.events.once(Phaser.Scenes.Events.DESTROY, () => {
+      window.removeEventListener("aldrym:item-drag-start", this.clearMovementInput);
+      this.input.off(Phaser.Input.Events.POINTER_UP, this.handlePointerUp, this);
+      this.resetCorpseCursor();
+    });
   }
 
   update(time: number): void {
@@ -163,6 +180,38 @@ export class MainScene extends Phaser.Scene {
     if (this.isSceneReady) {
       this.syncCorpses(this.pendingCorpses);
     }
+  }
+
+  setGroundItems(groundItems: GroundItem[]): void {
+    this.pendingGroundItems = groundItems.map((groundItem) => ({ ...groundItem }));
+
+    if (this.isSceneReady) {
+      this.syncGroundItems(this.pendingGroundItems);
+    }
+  }
+
+  getTilePositionFromClientPoint(clientX: number, clientY: number): Position | null {
+    const rect = this.game.canvas.getBoundingClientRect();
+
+    if (rect.width <= 0 || rect.height <= 0) {
+      return null;
+    }
+
+    const canvasX = (clientX - rect.left) * (this.game.canvas.width / rect.width);
+    const canvasY = (clientY - rect.top) * (this.game.canvas.height / rect.height);
+    const worldPoint = this.cameras.main.getWorldPoint(canvasX, canvasY);
+    const tileX = Math.floor(worldPoint.x / this.map.tileSize);
+    const tileY = Math.floor(worldPoint.y / this.map.tileSize);
+
+    if (tileX < 0 || tileY < 0 || tileX >= this.map.width || tileY >= this.map.height) {
+      return null;
+    }
+
+    return {
+      x: tileX,
+      y: tileY,
+      z: 0
+    };
   }
 
   private drawMap(): void {
@@ -225,17 +274,18 @@ export class MainScene extends Phaser.Scene {
     }
 
     this.input.mouse?.disableContextMenu();
-    this.cursors = keyboard.createCursorKeys();
-    this.movementKeys = keyboard.addKeys({
-      downLeft: Phaser.Input.Keyboard.KeyCodes.Z,
-      downRight: Phaser.Input.Keyboard.KeyCodes.C,
-      up: Phaser.Input.Keyboard.KeyCodes.W,
-      upLeft: Phaser.Input.Keyboard.KeyCodes.Q,
-      upRight: Phaser.Input.Keyboard.KeyCodes.E,
-      down: Phaser.Input.Keyboard.KeyCodes.S,
-      left: Phaser.Input.Keyboard.KeyCodes.A,
-      right: Phaser.Input.Keyboard.KeyCodes.D
-    }) as MovementKeys;
+    keyboard.on("keydown", (event: KeyboardEvent) => {
+      if (this.isMovementCode(event.code)) {
+        event.preventDefault();
+        this.pressedMovementCodes.add(event.code);
+      }
+    });
+    keyboard.on("keyup", (event: KeyboardEvent) => {
+      if (this.isMovementCode(event.code)) {
+        event.preventDefault();
+        this.pressedMovementCodes.delete(event.code);
+      }
+    });
   }
 
   private configureCamera(): void {
@@ -250,43 +300,92 @@ export class MainScene extends Phaser.Scene {
   }
 
   private getRequestedDirection(): MoveDirection | null {
-    if (this.isKeyDown(this.movementKeys?.upLeft)) {
+    if (this.pressedMovementCodes.has("KeyQ")) {
       return "up-left";
     }
 
-    if (this.isKeyDown(this.movementKeys?.upRight)) {
+    if (this.pressedMovementCodes.has("KeyE")) {
       return "up-right";
     }
 
-    if (this.isKeyDown(this.movementKeys?.downLeft)) {
+    if (this.pressedMovementCodes.has("KeyZ")) {
       return "down-left";
     }
 
-    if (this.isKeyDown(this.movementKeys?.downRight)) {
+    if (this.pressedMovementCodes.has("KeyC")) {
       return "down-right";
     }
 
-    if (this.isKeyDown(this.cursors?.up, this.movementKeys?.up)) {
+    if (this.pressedMovementCodes.has("ArrowUp") || this.pressedMovementCodes.has("KeyW")) {
       return "up";
     }
 
-    if (this.isKeyDown(this.cursors?.down, this.movementKeys?.down)) {
+    if (this.pressedMovementCodes.has("ArrowDown") || this.pressedMovementCodes.has("KeyS")) {
       return "down";
     }
 
-    if (this.isKeyDown(this.cursors?.left, this.movementKeys?.left)) {
+    if (this.pressedMovementCodes.has("ArrowLeft") || this.pressedMovementCodes.has("KeyA")) {
       return "left";
     }
 
-    if (this.isKeyDown(this.cursors?.right, this.movementKeys?.right)) {
+    if (this.pressedMovementCodes.has("ArrowRight") || this.pressedMovementCodes.has("KeyD")) {
       return "right";
     }
 
     return null;
   }
 
-  private isKeyDown(...keys: Array<Phaser.Input.Keyboard.Key | undefined>): boolean {
-    return keys.some((key) => Boolean(key?.isDown));
+  private isMovementCode(code: string): boolean {
+    return (
+      code === "ArrowUp" ||
+      code === "ArrowDown" ||
+      code === "ArrowLeft" ||
+      code === "ArrowRight" ||
+      code === "KeyW" ||
+      code === "KeyA" ||
+      code === "KeyS" ||
+      code === "KeyD" ||
+      code === "KeyQ" ||
+      code === "KeyE" ||
+      code === "KeyZ" ||
+      code === "KeyC"
+    );
+  }
+
+  private readonly clearMovementInput = (): void => {
+    this.pressedMovementCodes.clear();
+  };
+
+  private readonly handlePointerUp = (pointer: Phaser.Input.Pointer): void => {
+    const groundItemId = this.draggedGroundItemId;
+    this.draggedGroundItemId = null;
+
+    if (!groundItemId || !this.onMoveGroundItem) {
+      return;
+    }
+
+    const position = this.getTilePositionFromWorldPoint(pointer.worldX, pointer.worldY);
+
+    if (!position) {
+      return;
+    }
+
+    this.onMoveGroundItem(groundItemId, position);
+  };
+
+  private getTilePositionFromWorldPoint(worldX: number, worldY: number): Position | null {
+    const tileX = Math.floor(worldX / this.map.tileSize);
+    const tileY = Math.floor(worldY / this.map.tileSize);
+
+    if (tileX < 0 || tileY < 0 || tileX >= this.map.width || tileY >= this.map.height) {
+      return null;
+    }
+
+    return {
+      x: tileX,
+      y: tileY,
+      z: 0
+    };
   }
 
   private syncPlayers(players: WorldPlayer[]): void {
@@ -343,6 +442,21 @@ export class MainScene extends Phaser.Scene {
       if (!knownCorpseIds.has(corpseId)) {
         this.destroyCorpseView(corpseId, view);
         this.corpseViews.delete(corpseId);
+      }
+    }
+  }
+
+  private syncGroundItems(groundItems: GroundItem[]): void {
+    const knownGroundItemIds = new Set(groundItems.map((groundItem) => groundItem.id));
+
+    for (const groundItem of groundItems) {
+      this.upsertGroundItemView(groundItem);
+    }
+
+    for (const [groundItemId, view] of this.groundItemViews.entries()) {
+      if (!knownGroundItemIds.has(groundItemId)) {
+        this.destroyGroundItemView(groundItemId, view);
+        this.groundItemViews.delete(groundItemId);
       }
     }
   }
@@ -513,6 +627,133 @@ export class MainScene extends Phaser.Scene {
 
   private resetCorpseCursor(): void {
     this.setCorpseCursor("");
+  }
+
+  private upsertGroundItemView(groundItem: GroundItem): void {
+    const existingView = this.groundItemViews.get(groundItem.id);
+    const { x, y } = getTileCenter(this.map, groundItem);
+
+    if (!existingView) {
+      this.groundItemViews.set(groundItem.id, this.createGroundItemView(groundItem, x, y));
+      return;
+    }
+
+    existingView.container.setPosition(x, y);
+    existingView.label.setText(this.getGroundItemLabel(groundItem));
+    existingView.quantity.setText(groundItem.quantity > 1 ? String(groundItem.quantity) : "");
+  }
+
+  private createGroundItemView(groundItem: GroundItem, x: number, y: number): GroundItemView {
+    const highlight = this.add.rectangle(0, 0, this.map.tileSize - 8, this.map.tileSize - 8, 0xc9a25d, 0.06);
+    const hitArea = this.add.zone(0, 0, this.map.tileSize, this.map.tileSize);
+    const shadow = this.add.ellipse(0, 8, 18, 7, 0x000000, 0.24);
+    const body = this.add.rectangle(0, 2, 12, 12, this.getGroundItemColor(groundItem), 1);
+    const quantity = this.add.text(9, 7, groundItem.quantity > 1 ? String(groundItem.quantity) : "", {
+      color: "#fff1bf",
+      fontFamily: "Georgia",
+      fontSize: "8px",
+      stroke: "#120c08",
+      strokeThickness: 2
+    });
+    const label = this.add.text(0, -14, this.getGroundItemLabel(groundItem), {
+      color: "#f7df9f",
+      fontFamily: "Georgia",
+      fontSize: "8px",
+      stroke: "#120c08",
+      strokeThickness: 3
+    });
+    const tooltip = this.add.text(0, -29, "Pick up", {
+      backgroundColor: "#2b1a10",
+      color: "#f7df9f",
+      fontFamily: "Georgia",
+      fontSize: "8px",
+      padding: { x: 3, y: 2 },
+      stroke: "#120c08",
+      strokeThickness: 2
+    });
+
+    highlight.setStrokeStyle(1, 0xc9a25d, 0.48);
+    body.setStrokeStyle(1, 0x2e1a10, 1);
+    body.setAngle(45);
+    quantity.setOrigin(1, 1);
+    label.setOrigin(0.5, 1);
+    tooltip.setOrigin(0.5, 1);
+    tooltip.setVisible(false);
+    hitArea.setOrigin(0.5);
+    hitArea.setInteractive();
+    hitArea.on("pointerover", () => {
+      this.setGroundItemHoverState(groundItem.id, true);
+    });
+    hitArea.on("pointerout", () => {
+      this.setGroundItemHoverState(groundItem.id, false);
+    });
+    hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.button === 2) {
+        this.onTakeGroundItem?.(groundItem.id);
+        return;
+      }
+
+      if (pointer.button === 0) {
+        this.draggedGroundItemId = groundItem.id;
+        this.pressedMovementCodes.clear();
+        window.dispatchEvent(
+          new CustomEvent("aldrym:ground-item-drag-start", {
+            detail: {
+              groundItemId: groundItem.id
+            }
+          })
+        );
+      }
+    });
+
+    const container = this.add.container(x, y, [highlight, hitArea, shadow, body, quantity, label, tooltip]);
+    container.setDepth(13);
+
+    return {
+      body,
+      container,
+      highlight,
+      hitArea,
+      label,
+      quantity,
+      tooltip
+    };
+  }
+
+  private destroyGroundItemView(groundItemId: string, view: GroundItemView): void {
+    if (this.hoveredGroundItemId === groundItemId) {
+      this.hoveredGroundItemId = null;
+      this.resetCorpseCursor();
+    }
+
+    view.hitArea.removeAllListeners();
+    view.container.destroy(true);
+  }
+
+  private setGroundItemHoverState(groundItemId: string, isHovered: boolean): void {
+    const view = this.groundItemViews.get(groundItemId);
+
+    if (!view) {
+      return;
+    }
+
+    if (isHovered) {
+      this.hoveredGroundItemId = groundItemId;
+      view.highlight.setFillStyle(0xc9a25d, 0.18);
+      view.highlight.setStrokeStyle(2, 0xf0d18c, 1);
+      view.tooltip.setVisible(true);
+      this.setCorpseCursor("pointer");
+      return;
+    }
+
+    if (this.hoveredGroundItemId === groundItemId) {
+      this.hoveredGroundItemId = null;
+      this.resetCorpseCursor();
+    }
+
+    view.highlight.setFillStyle(0xc9a25d, 0.06);
+    view.highlight.setStrokeStyle(1, 0xc9a25d, 0.48);
+    view.tooltip.setVisible(false);
   }
 
   private upsertMonsterView(monster: WorldMonster): void {
@@ -783,6 +1024,27 @@ export class MainScene extends Phaser.Scene {
 
   private getCorpseLabel(corpse: Corpse): string {
     return corpse.isEmpty ? `${corpse.monsterName} corpse` : `${corpse.monsterName} corpse *`;
+  }
+
+  private getGroundItemLabel(groundItem: GroundItem): string {
+    return groundItem.quantity > 1 ? `${groundItem.name} x${groundItem.quantity}` : groundItem.name;
+  }
+
+  private getGroundItemColor(groundItem: GroundItem): number {
+    switch (groundItem.itemType) {
+      case "currency":
+        return 0xd8b84d;
+      case "weapon":
+        return 0xb7b0a2;
+      case "container":
+        return 0x8d5c32;
+      case "consumable":
+        return 0xb84d55;
+      case "creature_part":
+        return 0x8f6f50;
+      default:
+        return 0xd8b84d;
+    }
   }
 
 }
