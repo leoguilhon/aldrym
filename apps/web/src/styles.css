@@ -419,6 +419,10 @@ p {
   margin-bottom: 1rem;
 }
 
+.character-card__actions {
+  margin-top: 1.35rem;
+}
+
 .character-pill {
   border: 1px solid rgba(108, 74, 38, 0.38);
   border-radius: 999px;

@@ -74,7 +74,7 @@ function CharacterCard({
         </div>
       </dl>
 
-      <div className="card-actions">
+      <div className="card-actions character-card__actions">
         <button
           className="button button--primary"
           onClick={() => onEnterWorld(character.id)}
