@@ -1,13 +1,22 @@
-import type { CharacterSummary, Position } from "@aldrym/shared";
+import type { CharacterSummary, InventoryItem, ItemDefinition, Position } from "@aldrym/shared";
 import { ConflictException, Inject, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { compare } from "bcryptjs";
 
 import { isPrismaUniqueConstraintError } from "../prisma/prisma-error.util";
 import { PrismaService } from "../prisma/prisma.service";
 import { UsersService } from "../users/users.service";
+import { itemDefinitions } from "../world-state.service";
 import { toCharacterSummary } from "./character.mapper";
 import { CreateCharacterDto } from "./dto/create-character.dto";
 import { DeleteCharacterDto } from "./dto/delete-character.dto";
+
+export class InventoryFullError extends Error {
+  constructor() {
+    super("Inventory is full");
+  }
+}
+
+const INVENTORY_SLOT_LIMIT = 10;
 
 @Injectable()
 export class CharactersService {
@@ -58,6 +67,66 @@ export class CharactersService {
     }
 
     return toCharacterSummary(character);
+  }
+
+  async listInventoryForUserCharacter(userId: string, characterId: string): Promise<InventoryItem[]> {
+    const character = await this.findCharacterIdentityForUser(userId, characterId);
+    return this.listInventoryForCharacter(character.id);
+  }
+
+  async addItemToInventoryForUserCharacter(
+    userId: string,
+    characterId: string,
+    item: ItemDefinition,
+    quantity: number
+  ): Promise<InventoryItem[]> {
+    const character = await this.findCharacterIdentityForUser(userId, characterId);
+    const normalizedQuantity = Math.max(1, Math.floor(quantity));
+
+    if (item.stackable) {
+      const existingItem = await this.prisma.characterItem.findFirst({
+        where: {
+          characterId: character.id,
+          itemKey: item.itemKey
+        },
+        orderBy: {
+          createdAt: "asc"
+        }
+      });
+
+      if (existingItem) {
+        await this.prisma.characterItem.update({
+          where: {
+            id: existingItem.id
+          },
+          data: {
+            quantity: existingItem.quantity + normalizedQuantity
+          }
+        });
+
+        return this.listInventoryForCharacter(character.id);
+      }
+    }
+
+    const occupiedSlots = await this.prisma.characterItem.count({
+      where: {
+        characterId: character.id
+      }
+    });
+
+    if (occupiedSlots >= INVENTORY_SLOT_LIMIT) {
+      throw new InventoryFullError();
+    }
+
+    await this.prisma.characterItem.create({
+      data: {
+        characterId: character.id,
+        itemKey: item.itemKey,
+        quantity: normalizedQuantity
+      }
+    });
+
+    return this.listInventoryForCharacter(character.id);
   }
 
   async delete(
@@ -202,5 +271,57 @@ export class CharactersService {
     }
 
     return level * level * 100;
+  }
+
+  private async findCharacterIdentityForUser(userId: string, characterId: string): Promise<{ id: string }> {
+    const character = await this.prisma.character.findFirst({
+      where: {
+        id: characterId,
+        userId
+      },
+      select: {
+        id: true
+      }
+    });
+
+    if (!character) {
+      throw new NotFoundException("Character not found");
+    }
+
+    return character;
+  }
+
+  private async listInventoryForCharacter(characterId: string): Promise<InventoryItem[]> {
+    const items = await this.prisma.characterItem.findMany({
+      where: {
+        characterId
+      },
+      orderBy: [
+        {
+          createdAt: "asc"
+        },
+        {
+          id: "asc"
+        }
+      ]
+    });
+
+    return items.map((item) => {
+      const definition = itemDefinitions[item.itemKey] ?? {
+        itemKey: item.itemKey,
+        name: item.itemKey,
+        stackable: false
+      };
+
+      return {
+        id: item.id,
+        itemKey: definition.itemKey,
+        name: definition.name,
+        stackable: definition.stackable,
+        quantity: item.quantity,
+        createdAt: item.createdAt.toISOString(),
+        updatedAt: item.updatedAt.toISOString()
+      };
+    });
   }
 }

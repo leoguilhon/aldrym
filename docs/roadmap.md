@@ -12,5 +12,5 @@
 
 ## Current Focus
 
-- The first PvE step is now in place: hardcoded local-map monsters, adjacent melee attacks, server-authoritative player damage, monster pursuit, collision, corpses, experience rewards, level-up persistence, respawn warnings, and timed respawn
-- Loot, inventory, equipment, skills, spells, monster damage, player death, PvP, NPCs, quests, and broader world scalability remain deferred to later phases
+- The loot and inventory step is now in place: defeated monsters create in-memory corpses with server-rolled loot, players can open and take loot from corpses through server validation, and character inventory persists in PostgreSQL
+- Equipment, item use, item trading, item dropping from inventory, containers, shops, skills, spells, monster damage, player death, PvP, NPCs, quests, and broader world scalability remain deferred to later phases

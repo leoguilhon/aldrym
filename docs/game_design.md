@@ -24,8 +24,12 @@ The current playable scope is a technical combat MVP on the local map:
 - Monsters follow the nearest player within 8 SQM and remain still when no player is close enough
 - Alive monsters occupy their tile and cannot be walked through by players
 - Defeated monsters grant experience to the attacking character, leave a corpse on the map, show a respawn warning shortly before returning, and respawn at their original spawn position after a short delay
+- Defeated monsters can create corpses containing simple original loot, such as coins, creature parts, a chipped dagger, or a small health flask
+- Players can open corpses by right-clicking them and can take loot only from the same tile or a cardinally adjacent tile
+- Inventory currently has 10 fixed slots. Loot that would require a new slot cannot be taken when all slots are occupied.
+- The game screen uses a more complete MMORPG-style client composition with a central Phaser viewport, right-side character/inventory/status panels, equipment placeholders, and a small loot window
 - Level thresholds are temporary MVP values: level 1 to 2 at 100 XP, level 2 to 3 at 250 XP, and level 3+ at `level * level * 100`
 - Level-up increases max health by 10, max mana by 5, and restores health and mana to max
 
-Loot, inventory, equipment, skills, spells, monster damage, player death, PvP, NPCs, and quests are intentionally outside this step.
+Equipment, item use, item trading, item dropping from inventory, containers, shops, skills, spells, monster damage, player death, PvP, NPCs, and quests are intentionally outside this step.
 

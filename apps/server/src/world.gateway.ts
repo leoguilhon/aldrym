@@ -4,6 +4,14 @@ import type {
   CharacterLevelUpEvent,
   CombatErrorEvent,
   CombatStoppedEvent,
+  CorpseCreatedEvent,
+  CorpseErrorEvent,
+  CorpseOpenRequest,
+  CorpseRemovedEvent,
+  CorpseTakeItemRequest,
+  CorpseUpdatedEvent,
+  InventoryErrorEvent,
+  InventoryUpdatedEvent,
   MonsterDamagedEvent,
   MonsterDiedEvent,
   MonsterMovedEvent,
@@ -14,6 +22,7 @@ import type {
   PlayerMovedEvent,
   Position,
   WorldClientToServerEvents,
+  WorldCorpsesEvent,
   WorldErrorEvent,
   WorldJoinRequest,
   WorldJoinedEvent,
@@ -44,7 +53,7 @@ import { Server, Socket } from "socket.io";
 
 import type { AuthenticatedUser } from "./auth/authenticated-user.interface";
 import { AuthService } from "./auth/auth.service";
-import { CharactersService } from "./characters/characters.service";
+import { CharactersService, InventoryFullError } from "./characters/characters.service";
 import { WorldStateService } from "./world-state.service";
 
 interface WorldSocketData {
@@ -62,6 +71,7 @@ const PLAYER_SCREEN_TILE_HALF_WIDTH = 7;
 const MONSTER_THINK_INTERVAL_MS = 700;
 const PLAYER_ATTACK_INTERVAL_MS = 1200;
 const RESPAWN_WARNING_MS = 3000;
+const EMPTY_CORPSE_DECAY_MS = 15000;
 
 type WorldSocket = Socket<
   WorldClientToServerEvents,
@@ -88,6 +98,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   private readonly logger = new Logger(WorldGateway.name);
   private readonly localMap = createLocalMap();
   private readonly combatSessions = new Map<string, CombatSession>();
+  private readonly corpseDecayTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly nextPlayerAttackAtBySocketId = new Map<string, number>();
   private readonly nextPlayerMoveAtBySocketId = new Map<string, number>();
   private monsterThinkTimer: ReturnType<typeof setInterval> | null = null;
@@ -215,10 +226,18 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       const monstersPayload: WorldMonstersEvent = {
         monsters: this.worldStateService.listMonsters()
       };
+      const corpsesPayload: WorldCorpsesEvent = {
+        corpses: this.worldStateService.listCorpses()
+      };
+      const inventoryPayload: InventoryUpdatedEvent = {
+        items: await this.charactersService.listInventoryForUserCharacter(user.id, character.id)
+      };
 
       client.emit(worldEventNames.worldJoined, joinedPayload);
       client.emit(worldEventNames.worldPlayers, playersPayload);
       client.emit(worldEventNames.worldMonsters, monstersPayload);
+      client.emit(worldEventNames.worldCorpses, corpsesPayload);
+      client.emit(worldEventNames.inventoryUpdated, inventoryPayload);
       client.broadcast.emit(worldEventNames.playerJoined, {
         player: worldPlayer
       });
@@ -337,6 +356,156 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     this.stopCombatSession(client, "manual");
   }
 
+  @SubscribeMessage(worldEventNames.corpseOpen)
+  handleCorpseOpen(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: CorpseOpenRequest
+  ): void {
+    const user = client.data.user;
+
+    if (!user) {
+      this.emitCorpseError(client, "Authentication is required.", "unauthenticated");
+      return;
+    }
+
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!activePlayer) {
+      this.emitCorpseError(client, "Join the world before opening corpses.", "world_join_required");
+      return;
+    }
+
+    const corpseId = payload?.corpseId?.trim();
+
+    if (!corpseId) {
+      this.emitCorpseError(client, "A corpse id is required.", "invalid_corpse_id");
+      return;
+    }
+
+    const corpse = this.worldStateService.getCorpse(corpseId);
+
+    if (!corpse) {
+      this.emitCorpseError(client, "That corpse is gone.", "corpse_not_found");
+      return;
+    }
+
+    if (!this.isInDirectContact(activePlayer.position, corpse)) {
+      this.emitCorpseError(client, "You need to stand beside the corpse.", "corpse_too_far");
+      return;
+    }
+
+    client.emit(worldEventNames.corpseOpened, {
+      corpse
+    });
+  }
+
+  @SubscribeMessage(worldEventNames.corpseTakeItem)
+  async handleCorpseTakeItem(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: CorpseTakeItemRequest
+  ): Promise<void> {
+    const user = client.data.user;
+
+    if (!user) {
+      this.emitInventoryError(client, "Authentication is required.", "unauthenticated");
+      return;
+    }
+
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!activePlayer) {
+      this.emitInventoryError(client, "Join the world before taking loot.", "world_join_required");
+      return;
+    }
+
+    const corpseId = payload?.corpseId?.trim();
+    const corpseItemId = payload?.corpseItemId?.trim();
+    const quantity = Math.floor(payload?.quantity ?? 0);
+
+    if (!corpseId || !corpseItemId) {
+      this.emitCorpseError(client, "A corpse and item id are required.", "invalid_corpse_item_request");
+      return;
+    }
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      this.emitCorpseError(client, "Loot quantity is invalid.", "invalid_quantity");
+      return;
+    }
+
+    const corpse = this.worldStateService.getCorpse(corpseId);
+
+    if (!corpse) {
+      this.emitCorpseError(client, "That corpse is gone.", "corpse_not_found");
+      return;
+    }
+
+    if (!this.isInDirectContact(activePlayer.position, corpse)) {
+      this.emitCorpseError(client, "You need to stand beside the corpse.", "corpse_too_far");
+      return;
+    }
+
+    const corpseItem = corpse.items.find((item) => item.corpseItemId === corpseItemId);
+
+    if (!corpseItem) {
+      this.emitCorpseError(client, "That loot is no longer in the corpse.", "corpse_item_not_found");
+      return;
+    }
+
+    if (quantity > corpseItem.quantity) {
+      this.emitCorpseError(client, "That corpse does not contain that many items.", "invalid_quantity");
+      return;
+    }
+
+    const takeResult = this.worldStateService.takeCorpseItem(corpse.id, corpseItem.corpseItemId, quantity);
+
+    if (!takeResult) {
+      this.emitCorpseError(client, "That loot is no longer in the corpse.", "corpse_item_not_found");
+      return;
+    }
+
+    try {
+      const inventoryItems = await this.charactersService.addItemToInventoryForUserCharacter(
+        user.id,
+        activePlayer.characterId,
+        {
+          itemKey: takeResult.item.itemKey,
+          name: takeResult.item.name,
+          stackable: takeResult.item.stackable
+        },
+        takeResult.item.quantity
+      );
+
+      client.emit(worldEventNames.inventoryUpdated, {
+        items: inventoryItems,
+        message: `Took ${takeResult.item.quantity} ${takeResult.item.name}.`
+      });
+
+      client.emit(worldEventNames.corpseUpdated, {
+        corpse: takeResult.corpse
+      });
+      this.server.emit(worldEventNames.corpseUpdated, {
+        corpse: takeResult.corpse
+      });
+
+      if (takeResult.corpse.isEmpty) {
+        this.scheduleCorpseDecay(takeResult.corpse.id, EMPTY_CORPSE_DECAY_MS);
+      }
+    } catch (error) {
+      const restoredCorpse = this.worldStateService.restoreCorpseItem(corpse.id, takeResult.item);
+      if (restoredCorpse) {
+        this.server.emit(worldEventNames.corpseUpdated, {
+          corpse: restoredCorpse
+        });
+      }
+      if (error instanceof InventoryFullError) {
+        this.emitInventoryError(client, "Your inventory is full.", "inventory_full");
+        return;
+      }
+      this.logger.warn(`Failed to take corpse item for socket ${client.id}: ${error instanceof Error ? error.message : "unknown error"}`);
+      this.emitInventoryError(client, "The item could not be added to your inventory.", "inventory_update_failed");
+    }
+  }
+
   private startCombatSession(client: WorldSocket, monsterId: string): void {
     const playerAttackTimer = setInterval(() => {
       void this.performPlayerAttack(client, monsterId);
@@ -440,6 +609,14 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     };
 
     this.server.emit(worldEventNames.monsterDied, diedPayload);
+
+    const corpse = this.worldStateService.createCorpseForMonster(damagedMonster);
+    const corpsePayload: CorpseCreatedEvent = {
+      corpse
+    };
+
+    this.server.emit(worldEventNames.corpseCreated, corpsePayload);
+    this.scheduleCorpseDecay(corpse.id, Math.max(0, Date.parse(corpse.decayAt) - Date.now()));
 
     try {
       const result = await this.charactersService.addExperienceForUserCharacter(
@@ -603,6 +780,31 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }, respawnMs);
   }
 
+  private scheduleCorpseDecay(corpseId: string, delayMs: number): void {
+    const existingTimer = this.corpseDecayTimers.get(corpseId);
+
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+    }
+
+    const timer = setTimeout(() => {
+      this.corpseDecayTimers.delete(corpseId);
+      const removedCorpse = this.worldStateService.removeCorpse(corpseId);
+
+      if (!removedCorpse) {
+        return;
+      }
+
+      const payload: CorpseRemovedEvent = {
+        corpseId
+      };
+
+      this.server.emit(worldEventNames.corpseRemoved, payload);
+    }, delayMs);
+
+    this.corpseDecayTimers.set(corpseId, timer);
+  }
+
   private tryRespawnMonster(monsterId: string): void {
     const monster = this.worldStateService.getMonster(monsterId);
 
@@ -651,8 +853,23 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     client.emit(worldEventNames.combatError, payload);
   }
 
+  private emitInventoryError(client: WorldSocket, message: string, code?: string): void {
+    const payload: InventoryErrorEvent = { message, code };
+    client.emit(worldEventNames.inventoryError, payload);
+  }
+
+  private emitCorpseError(client: WorldSocket, message: string, code?: string): void {
+    const payload: CorpseErrorEvent = { message, code };
+    client.emit(worldEventNames.corpseError, payload);
+  }
+
   private isAdjacent(attacker: Position, target: Position): boolean {
     return attacker.z === target.z && Math.abs(attacker.x - target.x) + Math.abs(attacker.y - target.y) === 1;
+  }
+
+  private isInDirectContact(player: Position, target: Position): boolean {
+    const distance = this.getTileDistance(player, target);
+    return distance !== null && distance <= 1;
   }
 
   private isWithinPursuitRange(attacker: Position, target: Position): boolean {

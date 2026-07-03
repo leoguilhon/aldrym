@@ -1,5 +1,5 @@
 import { getMovementCooldownMs, getMovementTweenDurationMs } from "@aldrym/shared";
-import type { MoveDirection, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type { Corpse, MoveDirection, WorldMonster, WorldPlayer } from "@aldrym/shared";
 import Phaser from "phaser";
 
 import {
@@ -38,18 +38,25 @@ interface MonsterView {
   tileMarker: Phaser.GameObjects.Rectangle;
 }
 
+interface CorpseView {
+  container: Phaser.GameObjects.Container;
+  label: Phaser.GameObjects.Text;
+}
+
 interface RespawnWarningView {
   container: Phaser.GameObjects.Container;
 }
 
 export interface MainSceneOptions {
   activeCombatMonsterId?: string | null;
+  corpses: Corpse[];
   initialPlayers: WorldPlayer[];
   localCharacterId: string;
   map: LocalMapData;
   monsters: WorldMonster[];
   onAttackMonster?: (monsterId: string) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
+  onOpenCorpse?: (corpseId: string) => void;
 }
 
 const CAMERA_ZOOM = 2;
@@ -62,12 +69,15 @@ export class MainScene extends Phaser.Scene {
   private readonly map: LocalMapData;
   private readonly onAttackMonster?: (monsterId: string) => void;
   private readonly onMoveIntent?: (direction: MoveDirection) => void;
+  private readonly onOpenCorpse?: (corpseId: string) => void;
   private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
   private movementKeys?: MovementKeys;
   private nextMoveAt = 0;
   private isSceneReady = false;
+  private pendingCorpses: Corpse[];
   private pendingMonsters: WorldMonster[];
   private pendingPlayers: WorldPlayer[];
+  private readonly corpseViews = new Map<string, CorpseView>();
   private readonly monsterViews = new Map<string, MonsterView>();
   private readonly playerViews = new Map<string, PlayerView>();
   private readonly respawnWarningTimers = new Map<string, Phaser.Time.TimerEvent>();
@@ -80,6 +90,8 @@ export class MainScene extends Phaser.Scene {
     this.map = options.map;
     this.onAttackMonster = options.onAttackMonster;
     this.onMoveIntent = options.onMoveIntent;
+    this.onOpenCorpse = options.onOpenCorpse;
+    this.pendingCorpses = options.corpses;
     this.pendingMonsters = options.monsters;
     this.pendingPlayers = options.initialPlayers;
   }
@@ -89,6 +101,7 @@ export class MainScene extends Phaser.Scene {
     this.createControls();
     this.configureCamera();
     this.isSceneReady = true;
+    this.syncCorpses(this.pendingCorpses);
     this.syncMonsters(this.pendingMonsters);
     this.syncPlayers(this.pendingPlayers);
   }
@@ -133,6 +146,14 @@ export class MainScene extends Phaser.Scene {
 
     if (this.isSceneReady) {
       this.syncPlayers(this.pendingPlayers);
+    }
+  }
+
+  setCorpses(corpses: Corpse[]): void {
+    this.pendingCorpses = corpses.map((corpse) => ({ ...corpse, items: corpse.items.map((item) => ({ ...item })) }));
+
+    if (this.isSceneReady) {
+      this.syncCorpses(this.pendingCorpses);
     }
   }
 
@@ -303,6 +324,21 @@ export class MainScene extends Phaser.Scene {
     }
   }
 
+  private syncCorpses(corpses: Corpse[]): void {
+    const knownCorpseIds = new Set(corpses.map((corpse) => corpse.id));
+
+    for (const corpse of corpses) {
+      this.upsertCorpseView(corpse);
+    }
+
+    for (const [corpseId, view] of this.corpseViews.entries()) {
+      if (!knownCorpseIds.has(corpseId)) {
+        view.container.destroy(true);
+        this.corpseViews.delete(corpseId);
+      }
+    }
+  }
+
   private upsertPlayerView(player: WorldPlayer): void {
     const existingView = this.playerViews.get(player.characterId);
     const { x, y } = getTileCenter(this.map, player);
@@ -344,6 +380,52 @@ export class MainScene extends Phaser.Scene {
 
     const container = this.add.container(x, y, [label, shadow, body, tunic, head]);
     container.setDepth(isLocalPlayer ? 20 : 16);
+
+    return {
+      container,
+      label
+    };
+  }
+
+  private upsertCorpseView(corpse: Corpse): void {
+    const existingView = this.corpseViews.get(corpse.id);
+    const { x, y } = getTileCenter(this.map, corpse);
+
+    if (!existingView) {
+      this.corpseViews.set(corpse.id, this.createCorpseView(corpse, x, y));
+      return;
+    }
+
+    existingView.container.setPosition(x, y);
+    existingView.label.setText(this.getCorpseLabel(corpse));
+  }
+
+  private createCorpseView(corpse: Corpse, x: number, y: number): CorpseView {
+    const label = this.add.text(0, -17, this.getCorpseLabel(corpse), {
+      color: "#f7df9f",
+      fontFamily: "Georgia",
+      fontSize: "9px",
+      stroke: "#120c08",
+      strokeThickness: 3
+    });
+    const hitArea = this.add.zone(0, 0, this.map.tileSize, this.map.tileSize);
+    const shadow = this.add.ellipse(0, 8, 22, 8, 0x000000, 0.24);
+    const body = this.add.ellipse(0, 3, 22, 12, corpse.isEmpty ? 0x4b3a2f : 0x6c4c34, 1);
+    const cloth = this.add.rectangle(2, 1, 12, 4, corpse.isEmpty ? 0x6f5b46 : 0x9b7143, 0.65);
+
+    label.setOrigin(0.5, 1);
+    body.setStrokeStyle(1, 0x2e1a10, 1);
+    cloth.setAngle(-12);
+    hitArea.setOrigin(0.5);
+    hitArea.setInteractive();
+    hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (pointer.button === 2) {
+        this.onOpenCorpse?.(corpse.id);
+      }
+    });
+
+    const container = this.add.container(x, y, [hitArea, shadow, body, cloth, label]);
+    container.setDepth(14);
 
     return {
       container,
@@ -449,19 +531,24 @@ export class MainScene extends Phaser.Scene {
 
     view.alive = true;
     view.container.setDepth(40);
+    view.label.setVisible(true);
     view.label.setPosition(0, -24);
     view.label.setText(this.getMonsterLabel(monster));
     view.healthBack.setVisible(true);
     view.healthBar.setVisible(true);
+    view.body.setVisible(true);
     view.body.setPosition(0, 0);
     view.body.setDisplaySize(24, 18);
     view.body.setFillStyle(this.getMonsterColor(monster.type), 1);
     view.body.setStrokeStyle(2, 0x2e1a10, 1);
+    view.detail.setVisible(true);
     view.detail.setPosition(0, -1);
     view.detail.setDisplaySize(14, 6);
     view.detail.setFillStyle(0xf0d18c, 0.58);
     view.detail.setStrokeStyle(1, 0x3e2a19, 0.7);
+    view.shadow.setVisible(true);
     view.shadow.setDisplaySize(18, 9);
+    view.tileMarker.setVisible(true);
     view.hitArea.setInteractive();
     this.updateMonsterHealthBar(view.healthBar, healthRatio);
     this.updateMonsterTileMarker(view.tileMarker, monster);
@@ -470,20 +557,14 @@ export class MainScene extends Phaser.Scene {
   private updateMonsterCorpseView(view: MonsterView, monster: WorldMonster): void {
     view.alive = false;
     view.container.setDepth(18);
-    view.label.setPosition(0, -18);
-    view.label.setText(`${monster.name} corpse`);
+    view.label.setVisible(false);
     view.healthBack.setVisible(false);
     view.healthBar.setVisible(false);
-    view.body.setPosition(0, 4);
-    view.body.setDisplaySize(24, 12);
-    view.body.setFillStyle(0x4d3b2d, 0.95);
-    view.body.setStrokeStyle(1, 0x2e1a10, 0.8);
-    view.detail.setPosition(2, 2);
-    view.detail.setDisplaySize(12, 4);
-    view.detail.setFillStyle(0x8a6b45, 0.55);
-    view.detail.setStrokeStyle(1, 0x2e1a10, 0.35);
-    view.shadow.setDisplaySize(20, 9);
+    view.body.setVisible(false);
+    view.detail.setVisible(false);
+    view.shadow.setVisible(false);
     view.hitArea.disableInteractive();
+    view.tileMarker.setVisible(true);
     view.tileMarker.setStrokeStyle(1, 0x7d5b3d, 0.55);
   }
 
@@ -616,6 +697,10 @@ export class MainScene extends Phaser.Scene {
       default:
         return 0x7c7568;
     }
+  }
+
+  private getCorpseLabel(corpse: Corpse): string {
+    return corpse.isEmpty ? `${corpse.monsterName} corpse` : `${corpse.monsterName} corpse *`;
   }
 
 }

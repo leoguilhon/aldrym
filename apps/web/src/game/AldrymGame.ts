@@ -1,4 +1,4 @@
-import type { MoveDirection, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type { Corpse, MoveDirection, WorldMonster, WorldPlayer } from "@aldrym/shared";
 import Phaser from "phaser";
 
 import { createGameConfig } from "./config/gameConfig";
@@ -7,9 +7,11 @@ import { MainScene } from "./scenes/MainScene";
 
 export interface AldrymGameOptions {
   activeCombatMonsterId?: string | null;
+  corpses: Corpse[];
   localCharacterId: string;
   monsters: WorldMonster[];
   onAttackMonster?: (monsterId: string) => void;
+  onOpenCorpse?: (corpseId: string) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
   parent: HTMLElement;
   players: WorldPlayer[];
@@ -22,12 +24,14 @@ export class AldrymGame {
   constructor(options: AldrymGameOptions) {
     this.scene = new MainScene({
       activeCombatMonsterId: options.activeCombatMonsterId,
+      corpses: options.corpses,
       initialPlayers: options.players,
       localCharacterId: options.localCharacterId,
       map: createLocalMap(),
       monsters: options.monsters,
       onAttackMonster: options.onAttackMonster,
-      onMoveIntent: options.onMoveIntent
+      onMoveIntent: options.onMoveIntent,
+      onOpenCorpse: options.onOpenCorpse
     });
 
     this.game = new Phaser.Game(
@@ -44,6 +48,10 @@ export class AldrymGame {
 
   setMonsters(monsters: WorldMonster[]): void {
     this.scene.setMonsters(monsters);
+  }
+
+  setCorpses(corpses: Corpse[]): void {
+    this.scene.setCorpses(corpses);
   }
 
   setActiveCombatMonsterId(monsterId: string | null): void {

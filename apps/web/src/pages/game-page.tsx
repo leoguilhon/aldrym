@@ -1,6 +1,10 @@
 import type {
   CharacterSummary,
   CombatErrorEvent,
+  Corpse,
+  CorpseErrorEvent,
+  InventoryErrorEvent,
+  InventoryItem,
   MoveDirection,
   Position,
   WorldClientToServerEvents,
@@ -19,16 +23,13 @@ import { StatusView } from "../components/status-view";
 import { fetchCharacter, getApiBaseUrl } from "../lib/api";
 import { getErrorMessage } from "../lib/api-error";
 
-type WorldConnectionState =
-  | "connecting"
-  | "connected"
-  | "joined"
-  | "disconnected"
-  | "error";
+type WorldConnectionState = "connecting" | "connected" | "joined" | "disconnected" | "error";
 
 const localMap = createLocalMap();
 const playerScreenTileHalfHeight = 5;
 const playerScreenTileHalfWidth = 7;
+const equipmentSlots = ["Head", "Body", "Legs", "Weapon", "Shield", "Feet"];
+const inventorySlotCount = 10;
 
 function upsertWorldPlayer(players: WorldPlayer[], nextPlayer: WorldPlayer): WorldPlayer[] {
   const existingIndex = players.findIndex((player) => player.characterId === nextPlayer.characterId);
@@ -37,9 +38,7 @@ function upsertWorldPlayer(players: WorldPlayer[], nextPlayer: WorldPlayer): Wor
     return [...players, nextPlayer];
   }
 
-  return players.map((player) =>
-    player.characterId === nextPlayer.characterId ? nextPlayer : player
-  );
+  return players.map((player) => (player.characterId === nextPlayer.characterId ? nextPlayer : player));
 }
 
 function removeWorldPlayer(players: WorldPlayer[], characterId: string): WorldPlayer[] {
@@ -62,6 +61,30 @@ function updateWorldMonster(
   updates: Partial<Pick<WorldMonster, "alive" | "health" | "maxHealth">>
 ): WorldMonster[] {
   return monsters.map((monster) => (monster.id === monsterId ? { ...monster, ...updates } : monster));
+}
+
+function upsertCorpse(corpses: Corpse[], nextCorpse: Corpse): Corpse[] {
+  const existingIndex = corpses.findIndex((corpse) => corpse.id === nextCorpse.id);
+
+  if (existingIndex === -1) {
+    return [...corpses, nextCorpse];
+  }
+
+  return corpses.map((corpse) => (corpse.id === nextCorpse.id ? nextCorpse : corpse));
+}
+
+function upsertOpenedCorpse(corpses: Corpse[], nextCorpse: Corpse): Corpse[] {
+  const existingIndex = corpses.findIndex((corpse) => corpse.id === nextCorpse.id);
+
+  if (existingIndex === -1) {
+    return [...corpses, nextCorpse];
+  }
+
+  return corpses.map((corpse) => (corpse.id === nextCorpse.id ? nextCorpse : corpse));
+}
+
+function removeCorpse(corpses: Corpse[], corpseId: string): Corpse[] {
+  return corpses.filter((corpse) => corpse.id !== corpseId);
 }
 
 function findNearestVisibleMonster(position: Position | null, monsters: WorldMonster[]): WorldMonster | null {
@@ -104,7 +127,7 @@ function getConnectionLabel(state: WorldConnectionState): string {
     case "connected":
       return "Connected";
     case "joined":
-      return "Joined World";
+      return "Joined";
     case "disconnected":
       return "Disconnected";
     case "error":
@@ -119,9 +142,9 @@ function getConnectionCopy(state: WorldConnectionState): string {
     case "connecting":
       return "Opening a Socket.IO connection to the world server.";
     case "connected":
-      return "Socket connection is open. Waiting for the world join response.";
+      return "Socket connection is open. Waiting for world join.";
     case "joined":
-      return "World connection is active and movement is now server-authoritative.";
+      return "World connection is active.";
     case "disconnected":
       return "The world server connection was closed.";
     case "error":
@@ -173,40 +196,52 @@ function Meter({
 
 function GameViewport({
   activeCombatMonsterId,
+  corpses,
   localCharacterId,
   monsters,
   onAttackMonster,
   onMoveIntent,
+  onOpenCorpse,
   players
 }: {
   activeCombatMonsterId: string | null;
+  corpses: Corpse[];
   localCharacterId: string;
   monsters: WorldMonster[];
   onAttackMonster: (monsterId: string) => void;
   onMoveIntent: (direction: MoveDirection) => void;
+  onOpenCorpse: (corpseId: string) => void;
   players: WorldPlayer[];
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<{
     destroy: () => void;
     setActiveCombatMonsterId: (monsterId: string | null) => void;
+    setCorpses: (nextCorpses: Corpse[]) => void;
     setMonsters: (nextMonsters: WorldMonster[]) => void;
     setPlayers: (nextPlayers: WorldPlayer[]) => void;
   } | null>(null);
-  const attackMonsterRef = useRef(onAttackMonster);
   const activeCombatMonsterIdRef = useRef(activeCombatMonsterId);
+  const attackMonsterRef = useRef(onAttackMonster);
+  const corpsesRef = useRef(corpses);
   const monstersRef = useRef(monsters);
   const moveIntentRef = useRef(onMoveIntent);
+  const openCorpseRef = useRef(onOpenCorpse);
   const playersRef = useRef(players);
+
+  useEffect(() => {
+    activeCombatMonsterIdRef.current = activeCombatMonsterId;
+    gameRef.current?.setActiveCombatMonsterId(activeCombatMonsterId);
+  }, [activeCombatMonsterId]);
 
   useEffect(() => {
     attackMonsterRef.current = onAttackMonster;
   }, [onAttackMonster]);
 
   useEffect(() => {
-    activeCombatMonsterIdRef.current = activeCombatMonsterId;
-    gameRef.current?.setActiveCombatMonsterId(activeCombatMonsterId);
-  }, [activeCombatMonsterId]);
+    corpsesRef.current = corpses;
+    gameRef.current?.setCorpses(corpses);
+  }, [corpses]);
 
   useEffect(() => {
     monstersRef.current = monsters;
@@ -216,6 +251,10 @@ function GameViewport({
   useEffect(() => {
     moveIntentRef.current = onMoveIntent;
   }, [onMoveIntent]);
+
+  useEffect(() => {
+    openCorpseRef.current = onOpenCorpse;
+  }, [onOpenCorpse]);
 
   useEffect(() => {
     playersRef.current = players;
@@ -241,18 +280,21 @@ function GameViewport({
 
       const game = new AldrymGame({
         activeCombatMonsterId: activeCombatMonsterIdRef.current,
+        corpses: corpsesRef.current,
         localCharacterId,
         monsters: monstersRef.current,
         onAttackMonster: (monsterId) => attackMonsterRef.current(monsterId),
         onMoveIntent: (direction) => moveIntentRef.current(direction),
+        onOpenCorpse: (corpseId) => openCorpseRef.current(corpseId),
         parent: mountElement,
         players: playersRef.current
       });
 
       gameRef.current = game;
       game.setActiveCombatMonsterId(activeCombatMonsterIdRef.current);
-      game.setPlayers(playersRef.current);
+      game.setCorpses(corpsesRef.current);
       game.setMonsters(monstersRef.current);
+      game.setPlayers(playersRef.current);
     }
 
     void mountGame();
@@ -264,10 +306,89 @@ function GameViewport({
     };
   }, [localCharacterId]);
 
+  return <div className="game-client__viewport-mount" ref={containerRef} />;
+}
+
+function LootWindow({
+  corpse,
+  errorMessage,
+  onClose,
+  onTakeItem
+}: {
+  corpse: Corpse | null;
+  errorMessage: string | null;
+  onClose: () => void;
+  onTakeItem: (corpseId: string, corpseItemId: string, quantity: number) => void;
+}) {
+  if (!corpse && !errorMessage) {
+    return null;
+  }
+
   return (
-    <div className="game-viewport">
-      <div className="game-viewport__mount" ref={containerRef} />
-    </div>
+    <section className="loot-window">
+      <div className="loot-window__header">
+        <strong>{corpse ? `${corpse.monsterName} Corpse` : "Loot"}</strong>
+        <button className="loot-window__close" onClick={onClose} type="button">
+          x
+        </button>
+      </div>
+
+      {errorMessage ? <p className="form-message form-message--error">{errorMessage}</p> : null}
+
+      {corpse ? (
+        corpse.items.length > 0 ? (
+          <ul className="loot-list">
+            {corpse.items.map((item) => (
+              <li className="loot-list__item" key={item.corpseItemId}>
+                <span>
+                  {item.name}
+                  {item.quantity > 1 ? ` x${item.quantity}` : ""}
+                </span>
+                <div>
+                  <button onClick={() => onTakeItem(corpse.id, item.corpseItemId, 1)} type="button">
+                    One
+                  </button>
+                  <button onClick={() => onTakeItem(corpse.id, item.corpseItemId, item.quantity)} type="button">
+                    All
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="panel-copy">The corpse is empty.</p>
+        )
+      ) : null}
+    </section>
+  );
+}
+
+function HorizontalInventory({ items }: { items: InventoryItem[] }) {
+  const slots = Array.from({ length: inventorySlotCount }, (_, index) => items[index] ?? null);
+
+  return (
+    <section className="game-inventory-bar">
+      <div className="game-inventory-bar__header">
+        <span>Inventory</span>
+        <strong>
+          {items.length} / {inventorySlotCount}
+        </strong>
+      </div>
+      <ul className="game-inventory-bar__items">
+        {slots.map((item, index) => (
+          <li className={item ? "game-inventory-bar__item" : "game-inventory-bar__item game-inventory-bar__item--empty"} key={item?.id ?? `empty-${index}`}>
+            {item ? (
+              <>
+              <span>{item.name}</span>
+              <strong>{item.quantity}</strong>
+              </>
+            ) : (
+              <span>Empty</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 
@@ -275,12 +396,17 @@ export function GamePage() {
   const { characterId } = useParams();
   const { token } = useAuth();
   const socketRef = useRef<Socket<WorldServerToClientEvents, WorldClientToServerEvents> | null>(null);
-  const [character, setCharacter] = useState<CharacterSummary | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [isLoadingCharacter, setIsLoadingCharacter] = useState(true);
-  const [connectionState, setConnectionState] = useState<WorldConnectionState>("connecting");
   const [activeCombatMonsterId, setActiveCombatMonsterId] = useState<string | null>(null);
+  const [character, setCharacter] = useState<CharacterSummary | null>(null);
+  const [connectionState, setConnectionState] = useState<WorldConnectionState>("connecting");
+  const [corpses, setCorpses] = useState<Corpse[]>([]);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [inventoryItems, setInventoryItems] = useState<InventoryItem[]>([]);
+  const [isLoadingCharacter, setIsLoadingCharacter] = useState(true);
+  const [lootErrorMessage, setLootErrorMessage] = useState<string | null>(null);
   const [monsters, setMonsters] = useState<WorldMonster[]>([]);
+  const [openedCorpses, setOpenedCorpses] = useState<Corpse[]>([]);
   const [players, setPlayers] = useState<WorldPlayer[]>([]);
   const [worldErrorMessage, setWorldErrorMessage] = useState<string | null>(null);
 
@@ -330,26 +456,27 @@ export function GamePage() {
     }
 
     const socket = io(getApiBaseUrl(), {
-      auth: {
-        token
-      },
+      auth: { token },
       reconnection: false,
       transports: ["websocket"]
     });
 
     socketRef.current = socket;
-    setConnectionState("connecting");
     setActiveCombatMonsterId(null);
+    setConnectionState("connecting");
+    setCorpses([]);
+    setFeedbackMessage(null);
+    setInventoryItems([]);
+    setLootErrorMessage(null);
     setMonsters([]);
+    setOpenedCorpses([]);
     setPlayers([]);
     setWorldErrorMessage(null);
 
     socket.on("connect", () => {
       setConnectionState("connected");
       setWorldErrorMessage(null);
-      socket.emit(worldEventNames.worldJoin, {
-        characterId
-      });
+      socket.emit(worldEventNames.worldJoin, { characterId });
     });
 
     socket.on("connect_error", (error: Error) => {
@@ -368,6 +495,10 @@ export function GamePage() {
 
     socket.on(worldEventNames.worldMonsters, (payload) => {
       setMonsters(payload.monsters);
+    });
+
+    socket.on(worldEventNames.worldCorpses, (payload) => {
+      setCorpses(payload.corpses);
     });
 
     socket.on(worldEventNames.playerJoined, (payload) => {
@@ -408,6 +539,43 @@ export function GamePage() {
 
     socket.on(worldEventNames.monsterRespawned, (payload) => {
       setMonsters((currentMonsters) => upsertWorldMonster(currentMonsters, payload.monster));
+    });
+
+    socket.on(worldEventNames.corpseCreated, (payload) => {
+      setCorpses((currentCorpses) => upsertCorpse(currentCorpses, payload.corpse));
+    });
+
+    socket.on(worldEventNames.corpseRemoved, (payload) => {
+      setCorpses((currentCorpses) => removeCorpse(currentCorpses, payload.corpseId));
+      setOpenedCorpses((currentCorpses) => removeCorpse(currentCorpses, payload.corpseId));
+    });
+
+    socket.on(worldEventNames.corpseOpened, (payload) => {
+      setLootErrorMessage(null);
+      setOpenedCorpses((currentCorpses) => upsertOpenedCorpse(currentCorpses, payload.corpse));
+      setCorpses((currentCorpses) => upsertCorpse(currentCorpses, payload.corpse));
+    });
+
+    socket.on(worldEventNames.corpseUpdated, (payload) => {
+      setOpenedCorpses((currentCorpses) =>
+        currentCorpses.some((corpse) => corpse.id === payload.corpse.id)
+          ? upsertOpenedCorpse(currentCorpses, payload.corpse)
+          : currentCorpses
+      );
+      setCorpses((currentCorpses) => upsertCorpse(currentCorpses, payload.corpse));
+    });
+
+    socket.on(worldEventNames.corpseError, (payload: CorpseErrorEvent) => {
+      setLootErrorMessage(payload.message);
+    });
+
+    socket.on(worldEventNames.inventoryUpdated, (payload) => {
+      setInventoryItems(payload.items);
+      setFeedbackMessage(payload.message ?? "Inventory updated.");
+    });
+
+    socket.on(worldEventNames.inventoryError, (payload: InventoryErrorEvent) => {
+      setFeedbackMessage(payload.message);
     });
 
     socket.on(worldEventNames.characterExperienceUpdated, (payload) => {
@@ -464,13 +632,12 @@ export function GamePage() {
       setActiveCombatMonsterId(payload.monsterId);
     });
 
-    socket.on(worldEventNames.combatStopped, (payload) => {
+    socket.on(worldEventNames.combatStopped, () => {
       setActiveCombatMonsterId(null);
-
     });
 
     socket.on(worldEventNames.combatError, (payload: CombatErrorEvent) => {
-      console.warn(payload.message);
+      setFeedbackMessage(payload.message);
     });
 
     socket.on(worldEventNames.worldError, (payload: WorldErrorEvent) => {
@@ -487,9 +654,12 @@ export function GamePage() {
     });
 
     socket.on("disconnect", (reason) => {
-      setConnectionState("disconnected");
       setActiveCombatMonsterId(null);
+      setConnectionState("disconnected");
+      setCorpses([]);
+      setInventoryItems([]);
       setMonsters([]);
+      setOpenedCorpses([]);
       setPlayers([]);
 
       if (reason !== "io client disconnect") {
@@ -504,12 +674,8 @@ export function GamePage() {
     };
   }, [characterId, loadedCharacterId, token]);
 
-  const localPlayer =
-    character ? players.find((player) => player.characterId === character.id) ?? null : null;
-  const localPosition =
-    character ? localPlayer ?? resolveLocalPlayerSpawn(localMap, character) : null;
-  const aliveMonsters = monsters.filter((monster) => monster.alive);
-  const firstAliveMonster = aliveMonsters[0] ?? null;
+  const localPlayer = character ? players.find((player) => player.characterId === character.id) ?? null : null;
+  const localPosition = character ? localPlayer ?? resolveLocalPlayerSpawn(localMap, character) : null;
   const isWorldReady = character !== null && connectionState === "joined" && localPlayer !== null;
 
   const handleMoveIntent = (direction: MoveDirection) => {
@@ -530,6 +696,26 @@ export function GamePage() {
     }
 
     socket.emit(worldEventNames.combatAttack, { monsterId });
+  };
+
+  const handleOpenCorpse = (corpseId: string) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.corpseOpen, { corpseId });
+  };
+
+  const handleTakeCorpseItem = (corpseId: string, corpseItemId: string, quantity: number) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.corpseTakeItem, { corpseId, corpseItemId, quantity });
   };
 
   const handleStopCombat = () => {
@@ -590,12 +776,7 @@ export function GamePage() {
   }
 
   if (isLoadingCharacter) {
-    return (
-      <StatusView
-        title="Preparing the travel papers"
-        message="Loading the selected character record before the world connection starts."
-      />
-    );
+    return <StatusView title="Preparing the travel papers" message="Loading the selected character record." />;
   }
 
   if (errorMessage || !character) {
@@ -613,133 +794,125 @@ export function GamePage() {
   }
 
   return (
-    <section className="page-stack">
-      <section className="panel page-hero">
-        <div>
-          <p className="panel-kicker">Multiplayer Client Step</p>
-          <h2>{character.name}</h2>
-          <p className="panel-copy">
-            World join and movement are now routed through Socket.IO. The server owns the
-            final position, while Phaser renders both the local player and other online
-            players with placeholder shapes.
-          </p>
-        </div>
-
-        <div className="hero-actions">
-          <Link className="button button--secondary" to="/characters">
-            Back to Characters
-          </Link>
-        </div>
-      </section>
-
-      <section className="game-layout">
-        <section className="panel game-panel">
-          <div className="game-panel__toolbar">
-            <div>
-              <p className="panel-kicker">Shared Training Ground</p>
-              <h3>{character.name}</h3>
-            </div>
-            <div className="game-position-badge">
-              <span>Current Position</span>
-              <strong>
-                <PositionLabel position={localPosition} />
-              </strong>
-            </div>
-          </div>
-
-          <div className="game-stage">
-            {isWorldReady ? (
+    <section className="game-client">
+      <main className="game-client__main">
+        <section className="game-client__stage">
+          {isWorldReady ? (
+            <div className="game-client__canvas-stack">
               <GameViewport
                 activeCombatMonsterId={activeCombatMonsterId}
+                corpses={corpses}
                 localCharacterId={character.id}
                 monsters={monsters}
                 onAttackMonster={handleAttackMonster}
                 onMoveIntent={handleMoveIntent}
+                onOpenCorpse={handleOpenCorpse}
                 players={players}
               />
-            ) : (
-              <div className="game-stage__fallback">
-                <p className="panel-kicker">World Connection</p>
-                <h3>{getConnectionLabel(connectionState)}</h3>
-                <p className="panel-copy">{getConnectionCopy(connectionState)}</p>
-                {worldErrorMessage ? (
-                  <p className="form-message form-message--error">{worldErrorMessage}</p>
-                ) : null}
+              <HorizontalInventory items={inventoryItems} />
+              {openedCorpses.length > 0 || lootErrorMessage ? (
+                <div className="loot-window-row">
+                  {openedCorpses.map((corpse) => (
+                    <LootWindow
+                      corpse={corpse}
+                      errorMessage={null}
+                      key={corpse.id}
+                      onClose={() => {
+                        setOpenedCorpses((currentCorpses) => removeCorpse(currentCorpses, corpse.id));
+                      }}
+                      onTakeItem={handleTakeCorpseItem}
+                    />
+                  ))}
+                  {lootErrorMessage ? (
+                    <LootWindow
+                      corpse={null}
+                      errorMessage={lootErrorMessage}
+                      onClose={() => {
+                        setLootErrorMessage(null);
+                      }}
+                      onTakeItem={handleTakeCorpseItem}
+                    />
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : (
+            <div className="game-stage__fallback">
+              <p className="panel-kicker">World Connection</p>
+              <h3>{getConnectionLabel(connectionState)}</h3>
+              <p className="panel-copy">{getConnectionCopy(connectionState)}</p>
+              {worldErrorMessage ? <p className="form-message form-message--error">{worldErrorMessage}</p> : null}
+            </div>
+          )}
+
+        </section>
+      </main>
+
+      <aside className="game-client__sidebar">
+        <section className="client-panel">
+          <div className="client-panel__header">
+            <span>Character</span>
+            <strong>Level {character.level}</strong>
+          </div>
+          <h2>{character.name}</h2>
+          <Meter current={character.health} label="Health" maximum={character.maxHealth} tone="health" />
+          <Meter current={character.mana} label="Mana" maximum={character.maxMana} tone="mana" />
+          <dl className="client-stat-grid client-stat-grid--primary">
+            <div>
+              <dt>Experience</dt>
+              <dd>{character.experience}</dd>
+            </div>
+            <div>
+              <dt>Position</dt>
+              <dd>
+                <PositionLabel position={localPosition} />
+              </dd>
+            </div>
+          </dl>
+        </section>
+
+        <section className="client-panel">
+          <div className="client-panel__header">
+            <span>Equipment</span>
+            <strong>Empty</strong>
+          </div>
+          <div className="equipment-grid">
+            {equipmentSlots.map((slot) => (
+              <div className="equipment-slot" key={slot}>
+                {slot}
               </div>
-            )}
+            ))}
           </div>
         </section>
 
-        <aside className="page-stack">
-          <section className="panel game-sidebar">
-            <div className="character-card__header">
-              <div>
-                <p className="panel-kicker">Character Sheet</p>
-                <h3>{character.name}</h3>
-              </div>
-              <div className="character-pill">Level {character.level}</div>
+        <section className="client-panel">
+          <div className="client-panel__header">
+            <span>Status</span>
+            <strong>MVP</strong>
+          </div>
+          <dl className="client-stat-grid">
+            <div>
+              <dt>Attack</dt>
+              <dd>Basic</dd>
             </div>
-
-            <Meter current={character.health} label="Health" maximum={character.maxHealth} tone="health" />
-            <Meter current={character.mana} label="Mana" maximum={character.maxMana} tone="mana" />
-
-            <dl className="metric-grid game-state-grid">
-              <div className="metric">
-                <dt>World State</dt>
-                <dd>{getConnectionLabel(connectionState)}</dd>
-              </div>
-              <div className="metric">
-                <dt>Online Players</dt>
-                <dd>{players.length}</dd>
-              </div>
-              <div className="metric">
-                <dt>Monsters</dt>
-                <dd>{aliveMonsters.length}</dd>
-              </div>
-              <div className="metric">
-                <dt>Nearest Monster</dt>
-                <dd>
-                  {firstAliveMonster ? (
-                    <>
-                      {firstAliveMonster.x}, {firstAliveMonster.y}, {firstAliveMonster.z}
-                    </>
-                  ) : (
-                    "None"
-                  )}
-                </dd>
-              </div>
-              <div className="metric">
-                <dt>Experience</dt>
-                <dd>{character.experience}</dd>
-              </div>
-              <div className="metric">
-                <dt>Local Position</dt>
-                <dd>
-                  <PositionLabel position={localPosition} />
-                </dd>
-              </div>
-            </dl>
-
-            {worldErrorMessage ? (
-              <p className="form-message form-message--error">{worldErrorMessage}</p>
-            ) : null}
-
-            <div className="card-actions">
-              <Link className="button button--primary" to="/characters">
-                Back to Characters
-              </Link>
+            <div>
+              <dt>Defense</dt>
+              <dd>Basic</dd>
             </div>
-          </section>
+            <div>
+              <dt>Health</dt>
+              <dd>{character.maxHealth}</dd>
+            </div>
+            <div>
+              <dt>Mana</dt>
+              <dd>{character.maxMana}</dd>
+            </div>
+          </dl>
+        </section>
 
-          <section className="panel game-sidebar">
-            <p className="panel-kicker">World Notes</p>
-            <p className="panel-copy">
-              Visible monsters can be targeted from range. Combat damage only lands from
-              adjacent tiles, and progression is resolved by the server.
-            </p>
-          </section>
-        </aside>
-      </section>
+        {feedbackMessage ? <p className="form-message form-message--success">{feedbackMessage}</p> : null}
+        {worldErrorMessage ? <p className="form-message form-message--error">{worldErrorMessage}</p> : null}
+      </aside>
     </section>
   );
 }

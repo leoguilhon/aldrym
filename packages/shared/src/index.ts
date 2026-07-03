@@ -116,6 +116,34 @@ export interface WorldMonster extends Position {
   spawnZ: number;
 }
 
+export interface ItemDefinition {
+  itemKey: string;
+  name: string;
+  stackable: boolean;
+}
+
+export interface InventoryItem extends ItemDefinition {
+  id: string;
+  quantity: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CorpseItem extends ItemDefinition {
+  corpseItemId: string;
+  quantity: number;
+}
+
+export interface Corpse extends Position {
+  id: string;
+  monsterId: string;
+  monsterName: string;
+  items: CorpseItem[];
+  createdAt: string;
+  decayAt: string;
+  isEmpty: boolean;
+}
+
 export interface WorldJoinRequest {
   characterId: string;
 }
@@ -132,12 +160,26 @@ export interface WorldMonstersEvent {
   monsters: WorldMonster[];
 }
 
+export interface WorldCorpsesEvent {
+  corpses: Corpse[];
+}
+
 export interface PlayerMoveRequest {
   direction: MoveDirection;
 }
 
 export interface AttackMonsterRequest {
   monsterId: string;
+}
+
+export interface CorpseOpenRequest {
+  corpseId: string;
+}
+
+export interface CorpseTakeItemRequest {
+  corpseId: string;
+  corpseItemId: string;
+  quantity: number;
 }
 
 export interface StopCombatRequest {
@@ -187,6 +229,37 @@ export interface MonsterRespawningEvent {
 
 export interface MonsterRespawnedEvent {
   monster: WorldMonster;
+}
+
+export interface CorpseCreatedEvent {
+  corpse: Corpse;
+}
+
+export interface CorpseRemovedEvent {
+  corpseId: string;
+}
+
+export interface CorpseOpenedEvent {
+  corpse: Corpse;
+}
+
+export interface CorpseUpdatedEvent {
+  corpse: Corpse;
+}
+
+export interface CorpseErrorEvent {
+  message: string;
+  code?: string;
+}
+
+export interface InventoryUpdatedEvent {
+  items: InventoryItem[];
+  message?: string;
+}
+
+export interface InventoryErrorEvent {
+  message: string;
+  code?: string;
 }
 
 export interface CharacterExperienceUpdatedEvent {
@@ -241,12 +314,15 @@ export interface WorldClientToServerEvents {
   "player:move": (payload: PlayerMoveRequest) => void;
   "combat:attack": (payload: AttackMonsterRequest) => void;
   "combat:stop": (payload?: StopCombatRequest) => void;
+  "corpse:open": (payload: CorpseOpenRequest) => void;
+  "corpse:take-item": (payload: CorpseTakeItemRequest) => void;
 }
 
 export interface WorldServerToClientEvents {
   "world:joined": (payload: WorldJoinedEvent) => void;
   "world:players": (payload: WorldPlayersEvent) => void;
   "world:monsters": (payload: WorldMonstersEvent) => void;
+  "world:corpses": (payload: WorldCorpsesEvent) => void;
   "player:joined": (payload: PlayerJoinedEvent) => void;
   "player:moved": (payload: PlayerMovedEvent) => void;
   "player:left": (payload: PlayerLeftEvent) => void;
@@ -256,6 +332,13 @@ export interface WorldServerToClientEvents {
   "monster:moved": (payload: MonsterMovedEvent) => void;
   "monster:respawning": (payload: MonsterRespawningEvent) => void;
   "monster:respawned": (payload: MonsterRespawnedEvent) => void;
+  "corpse:created": (payload: CorpseCreatedEvent) => void;
+  "corpse:removed": (payload: CorpseRemovedEvent) => void;
+  "corpse:opened": (payload: CorpseOpenedEvent) => void;
+  "corpse:updated": (payload: CorpseUpdatedEvent) => void;
+  "corpse:error": (payload: CorpseErrorEvent) => void;
+  "inventory:updated": (payload: InventoryUpdatedEvent) => void;
+  "inventory:error": (payload: InventoryErrorEvent) => void;
   "character:experience-updated": (payload: CharacterExperienceUpdatedEvent) => void;
   "character:level-up": (payload: CharacterLevelUpEvent) => void;
   "character:stats-updated": (payload: CharacterStatsUpdatedEvent) => void;
@@ -270,6 +353,7 @@ export const worldEventNames = {
   worldJoined: "world:joined",
   worldPlayers: "world:players",
   worldMonsters: "world:monsters",
+  worldCorpses: "world:corpses",
   worldError: "world:error",
   playerMove: "player:move",
   playerMoved: "player:moved",
@@ -283,6 +367,15 @@ export const worldEventNames = {
   monsterMoved: "monster:moved",
   monsterRespawning: "monster:respawning",
   monsterRespawned: "monster:respawned",
+  corpseOpen: "corpse:open",
+  corpseTakeItem: "corpse:take-item",
+  corpseCreated: "corpse:created",
+  corpseRemoved: "corpse:removed",
+  corpseOpened: "corpse:opened",
+  corpseUpdated: "corpse:updated",
+  corpseError: "corpse:error",
+  inventoryUpdated: "inventory:updated",
+  inventoryError: "inventory:error",
   characterExperienceUpdated: "character:experience-updated",
   characterLevelUp: "character:level-up",
   characterStatsUpdated: "character:stats-updated",

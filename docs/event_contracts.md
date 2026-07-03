@@ -1,6 +1,6 @@
 # Event Contracts
 
-This document defines the first multiplayer world events used by the browser client and authoritative server.
+This document defines the multiplayer world events used by the browser client and authoritative server.
 
 ## Client to Server
 
@@ -15,11 +15,19 @@ This document defines the first multiplayer world events used by the browser cli
 - `combat:attack`
   - Payload: `AttackMonsterRequest`
   - Shape: `{ monsterId: string }`
-  - Purpose: Select a specific visible monster for auto-attack, or stop if the same monster is already targeted. The server validates authentication, world join state, target existence, target life state, and screen-range targetability. Damage is still applied only from adjacent melee range.
+  - Purpose: Select a visible monster for server-owned auto-attack.
 - `combat:stop`
   - Payload: `StopCombatRequest`
   - Shape: `{ monsterId?: string }`
   - Purpose: Stop the current auto-attack session.
+- `corpse:open`
+  - Payload: `CorpseOpenRequest`
+  - Shape: `{ corpseId: string }`
+  - Purpose: Request corpse contents. The server verifies authentication, world join state, corpse existence, and direct contact.
+- `corpse:take-item`
+  - Payload: `CorpseTakeItemRequest`
+  - Shape: `{ corpseId: string; corpseItemId: string; quantity: number }`
+  - Purpose: Request taking loot from a corpse. The client never sends item keys, names, or trusted quantities beyond the requested amount.
 
 ## Server to Client
 
@@ -34,7 +42,11 @@ This document defines the first multiplayer world events used by the browser cli
 - `world:monsters`
   - Payload: `WorldMonstersEvent`
   - Shape: `{ monsters: WorldMonster[] }`
-  - Purpose: Send the current in-memory monster list after a successful join, including alive and defeated monsters.
+  - Purpose: Send the current in-memory monster list after a successful join.
+- `world:corpses`
+  - Payload: `WorldCorpsesEvent`
+  - Shape: `{ corpses: Corpse[] }`
+  - Purpose: Send current in-memory corpses after world join.
 - `player:joined`
   - Payload: `PlayerJoinedEvent`
   - Shape: `{ player: WorldPlayer }`
@@ -42,7 +54,7 @@ This document defines the first multiplayer world events used by the browser cli
 - `player:moved`
   - Payload: `PlayerMovedEvent`
   - Shape: `{ player: WorldPlayer }`
-  - Purpose: Broadcast authoritative movement results to all connected clients, including the moving player.
+  - Purpose: Broadcast authoritative movement results to all connected clients.
 - `player:left`
   - Payload: `PlayerLeftEvent`
   - Shape: `{ characterId: string }`
@@ -54,11 +66,11 @@ This document defines the first multiplayer world events used by the browser cli
 - `monster:died`
   - Payload: `MonsterDiedEvent`
   - Shape: `{ monsterId: string; monster: WorldMonster; experienceReward: number }`
-  - Purpose: Broadcast that a monster was defeated and should render as a corpse until respawn.
+  - Purpose: Broadcast that a monster was defeated.
 - `monster:moved`
   - Payload: `MonsterMovedEvent`
   - Shape: `{ monster: WorldMonster }`
-  - Purpose: Broadcast server-authoritative monster movement while a monster follows a nearby player.
+  - Purpose: Broadcast server-authoritative monster movement.
 - `monster:respawning`
   - Payload: `MonsterRespawningEvent`
   - Shape: `{ monsterId: string; x: number; y: number; z: number; respawnDueAt: number }`
@@ -67,6 +79,34 @@ This document defines the first multiplayer world events used by the browser cli
   - Payload: `MonsterRespawnedEvent`
   - Shape: `{ monster: WorldMonster }`
   - Purpose: Broadcast that a defeated monster returned at its original spawn position.
+- `corpse:created`
+  - Payload: `CorpseCreatedEvent`
+  - Shape: `{ corpse: Corpse }`
+  - Purpose: Broadcast a new corpse containing rolled monster loot.
+- `corpse:removed`
+  - Payload: `CorpseRemovedEvent`
+  - Shape: `{ corpseId: string }`
+  - Purpose: Remove a decayed corpse from clients.
+- `corpse:opened`
+  - Payload: `CorpseOpenedEvent`
+  - Shape: `{ corpse: Corpse }`
+  - Purpose: Send corpse contents to the requesting player after validation.
+- `corpse:updated`
+  - Payload: `CorpseUpdatedEvent`
+  - Shape: `{ corpse: Corpse }`
+  - Purpose: Update corpse contents or empty state after loot is taken.
+- `corpse:error`
+  - Payload: `CorpseErrorEvent`
+  - Shape: `{ message: string; code?: string }`
+  - Purpose: Report corpse interaction errors such as being too far away or the corpse being gone.
+- `inventory:updated`
+  - Payload: `InventoryUpdatedEvent`
+  - Shape: `{ items: InventoryItem[]; message?: string }`
+  - Purpose: Send the current persisted inventory to the owning player after world join or loot transfer.
+- `inventory:error`
+  - Payload: `InventoryErrorEvent`
+  - Shape: `{ message: string; code?: string }`
+  - Purpose: Report inventory write errors.
 - `character:experience-updated`
   - Payload: `CharacterExperienceUpdatedEvent`
   - Shape: `{ characterId: string; experience: number; gainedExperience: number; level: number; health: number; maxHealth: number; mana: number; maxMana: number }`
@@ -74,7 +114,7 @@ This document defines the first multiplayer world events used by the browser cli
 - `character:level-up`
   - Payload: `CharacterLevelUpEvent`
   - Shape: `{ characterId: string; level: number; health: number; maxHealth: number; mana: number; maxMana: number }`
-  - Purpose: Notify the attacking player that a level threshold was reached and restored stats were persisted.
+  - Purpose: Notify the attacking player that a level threshold was reached.
 - `character:stats-updated`
   - Payload: `CharacterStatsUpdatedEvent`
   - Shape: `{ characterId: string; health: number; maxHealth: number; mana: number; maxMana: number }`
@@ -90,21 +130,20 @@ This document defines the first multiplayer world events used by the browser cli
 - `combat:error`
   - Payload: `CombatErrorEvent`
   - Shape: `{ message: string; code?: string }`
-  - Purpose: Report combat-specific errors such as missing world join, dead target, or target out of range.
+  - Purpose: Report combat-specific errors.
 - `world:error`
   - Payload: `WorldErrorEvent`
   - Shape: `{ message: string; code?: string }`
-  - Purpose: Report join or protocol errors such as unauthenticated access or invalid movement requests.
+  - Purpose: Report join or protocol errors.
 
 ## Notes
 
 - Socket connections are authenticated with the same JWT token used by the REST API.
-- The server keeps live world positions and monster state in memory.
+- The server keeps live world positions, monster state, and corpse state in memory.
 - Character position is persisted only when a joined socket disconnects, not on every movement step.
-- Player movement is level-paced through a shared speed curve. Level 1 waits 700ms per cardinal tile, each level reduces that by 20ms, diagonal movement waits 40% longer, and the server enforces a 350ms minimum cooldown before the diagonal multiplier.
-- Player combat damage is a temporary original MVP roll of 8 to 16 melee damage. Monster damage is intentionally disabled for now. The client never sends damage values.
-- Auto-attack sessions are owned by the server and continue until stopped manually, the target dies, the target is lost, or the player leaves the 8 SQM pursuit range.
-- Monster pursuit is server-authoritative and proximity-based: alive monsters move toward the nearest player within 8 SQM and remain still when no player is in that range.
-- Alive monsters block player movement and cannot be walked through.
-- Defeated monsters stay in memory as corpses. The client renders a respawn warning shortly before `respawnDueAt` and removes the warning when the monster respawns.
-- Monsters are not persisted to PostgreSQL yet. Character experience, level, health, max health, mana, and max mana are persisted when progression changes.
+- Corpse interaction requires direct contact: same tile or cardinally adjacent tile. Diagonal interaction is not accepted.
+- Monster loot is rolled by the server into corpse contents. Items do not drop directly on the ground.
+- Corpse contents decay in memory. Normal corpses last 120 seconds; empty corpses decay after 15 seconds.
+- Character inventory is persisted to PostgreSQL. Stackable items merge into an existing character item row with the same `itemKey`; non-stackable items create separate rows.
+- Character inventory currently has 10 fixed slots. Adding a new item row fails when all slots are occupied, while stackable items already present can still merge into their existing row.
+- Monsters and corpses are not persisted to PostgreSQL yet. Character experience, level, health, max health, mana, max mana, and inventory are persisted when they change.
