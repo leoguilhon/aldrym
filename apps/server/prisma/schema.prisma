@@ -19,6 +19,7 @@ model Character {
   id         String   @id @default(cuid())
   name       String   @unique
   gender     String
+  characterClass String @default("knight")
   level      Int      @default(1)
   experience Int      @default(0)
   health     Int      @default(100)

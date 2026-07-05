@@ -22,6 +22,10 @@ export interface AuthResponse {
 
 export type CharacterGender = "male" | "female";
 
+export const characterClasses = ["knight", "druid", "sorcerer", "hunter"] as const;
+
+export type CharacterClass = (typeof characterClasses)[number];
+
 export interface Position {
   x: number;
   y: number;
@@ -31,6 +35,7 @@ export interface Position {
 export interface CreateCharacterRequest {
   name: string;
   gender: CharacterGender;
+  characterClass: CharacterClass;
 }
 
 export interface DeleteCharacterRequest {
@@ -41,6 +46,7 @@ export interface CharacterSummary extends Position {
   id: string;
   name: string;
   gender: CharacterGender;
+  characterClass: CharacterClass;
   level: number;
   experience: number;
   health: number;
@@ -59,8 +65,9 @@ const baseMovementCooldownMs = 700;
 const diagonalMovementCooldownMultiplier = 1.4;
 const movementCooldownReductionPerLevelMs = 20;
 const minimumMovementCooldownMs = 350;
-const minimumMovementTweenDurationMs = 160;
-const maximumMovementTweenDurationMs = 280;
+const movementTweenCompletionBufferMs = 45;
+const minimumMovementTweenDurationMs = 280;
+const maximumMovementTweenDurationMs = 900;
 
 export function isDiagonalMoveDirection(direction: MoveDirection): boolean {
   return direction === "up-left" || direction === "up-right" || direction === "down-left" || direction === "down-right";
@@ -76,8 +83,8 @@ export function getMovementCooldownMs(level: number, direction?: MoveDirection):
     : cappedCooldownMs;
 }
 
-export function getMovementTweenDurationMs(level: number): number {
-  const durationMs = Math.round(getMovementCooldownMs(level) * 0.45);
+export function getMovementTweenDurationMs(level: number, direction?: MoveDirection): number {
+  const durationMs = getMovementCooldownMs(level, direction) - movementTweenCompletionBufferMs;
 
   return Math.min(maximumMovementTweenDurationMs, Math.max(minimumMovementTweenDurationMs, durationMs));
 }
@@ -94,11 +101,16 @@ export interface LocalMapData {
 
 export interface WorldPlayer extends Position {
   characterId: string;
+  characterClass: CharacterClass;
   name: string;
   level: number;
+  health: number;
+  maxHealth: number;
+  mana: number;
+  maxMana: number;
 }
 
-export type MonsterType = "rat" | "wolf" | "troll" | "goblin" | "rotworm" | "orc";
+export type MonsterType = "rat" | "troll";
 
 export interface WorldMonster extends Position {
   id: string;
@@ -118,7 +130,18 @@ export interface WorldMonster extends Position {
 
 export type ItemType = "currency" | "creature_part" | "weapon" | "consumable" | "container";
 
-export const equipmentSlots = ["head", "body", "legs", "weapon", "shield", "feet", "backpack"] as const;
+export const equipmentSlots = [
+  "necklace",
+  "head",
+  "backpack",
+  "weapon",
+  "body",
+  "shield",
+  "ring",
+  "legs",
+  "trinket",
+  "feet"
+] as const;
 
 export type EquipmentSlot = (typeof equipmentSlots)[number];
 
@@ -215,6 +238,11 @@ export interface AttackMonsterRequest {
 
 export interface CorpseOpenRequest {
   corpseId: string;
+}
+
+export interface CorpseMoveRequest {
+  corpseId: string;
+  position: Position;
 }
 
 export interface CorpseTakeItemRequest {
@@ -458,6 +486,7 @@ export interface WorldClientToServerEvents {
   "combat:attack": (payload: AttackMonsterRequest) => void;
   "combat:stop": (payload?: StopCombatRequest) => void;
   "corpse:open": (payload: CorpseOpenRequest) => void;
+  "corpse:move": (payload: CorpseMoveRequest) => void;
   "corpse:take-item": (payload: CorpseTakeItemRequest) => void;
   "corpse:add-item": (payload: CorpseAddItemRequest) => void;
   "corpse:drop-item": (payload: CorpseDropItemRequest) => void;
@@ -531,6 +560,7 @@ export const worldEventNames = {
   monsterRespawning: "monster:respawning",
   monsterRespawned: "monster:respawned",
   corpseOpen: "corpse:open",
+  corpseMove: "corpse:move",
   corpseTakeItem: "corpse:take-item",
   corpseAddItem: "corpse:add-item",
   corpseDropItem: "corpse:drop-item",

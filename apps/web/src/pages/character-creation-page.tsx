@@ -1,4 +1,5 @@
-import type { CharacterGender, CreateCharacterRequest } from "@aldrym/shared";
+import type { CharacterClass, CharacterGender, CreateCharacterRequest } from "@aldrym/shared";
+import { characterClasses } from "@aldrym/shared";
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
@@ -32,8 +33,16 @@ function validateGender(value: string): value is CharacterGender {
   return value === "male" || value === "female";
 }
 
+function validateCharacterClass(value: string): value is CharacterClass {
+  return characterClasses.includes(value as CharacterClass);
+}
+
 function formatGenderLabel(gender: CharacterGender): string {
   return gender === "male" ? "Male" : "Female";
+}
+
+function formatCharacterClassLabel(characterClass: CharacterClass): string {
+  return characterClass.charAt(0).toUpperCase() + characterClass.slice(1);
 }
 
 export function CharacterCreationPage() {
@@ -41,6 +50,7 @@ export function CharacterCreationPage() {
   const { token } = useAuth();
   const [name, setName] = useState("");
   const [gender, setGender] = useState<string>("");
+  const [characterClass, setCharacterClass] = useState<string>("knight");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -58,6 +68,11 @@ export function CharacterCreationPage() {
       return;
     }
 
+    if (!validateCharacterClass(characterClass)) {
+      setErrorMessage("Character class is required.");
+      return;
+    }
+
     if (!token) {
       setErrorMessage("You must be signed in to create a character.");
       return;
@@ -68,7 +83,8 @@ export function CharacterCreationPage() {
 
     const payload: CreateCharacterRequest = {
       name: normalizeCharacterName(name),
-      gender
+      gender,
+      characterClass
     };
 
     try {
@@ -125,6 +141,22 @@ export function CharacterCreationPage() {
               {(["male", "female"] as CharacterGender[]).map((option) => (
                 <option key={option} value={option}>
                   {formatGenderLabel(option)}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Class</span>
+            <select
+              className="input"
+              name="characterClass"
+              onChange={(event) => setCharacterClass(event.target.value)}
+              value={characterClass}
+            >
+              {characterClasses.map((option) => (
+                <option key={option} value={option}>
+                  {formatCharacterClassLabel(option)}
                 </option>
               ))}
             </select>

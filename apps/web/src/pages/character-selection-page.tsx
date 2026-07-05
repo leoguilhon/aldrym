@@ -10,6 +10,10 @@ function formatGenderLabel(gender: CharacterSummary["gender"]): string {
   return gender === "male" ? "Male" : "Female";
 }
 
+function formatCharacterClassLabel(characterClass: CharacterSummary["characterClass"]): string {
+  return characterClass.charAt(0).toUpperCase() + characterClass.slice(1);
+}
+
 function CharacterCard({
   character,
   activeDeleteCharacterId,
@@ -49,6 +53,10 @@ function CharacterCard({
         <div className="metric">
           <dt>Gender</dt>
           <dd>{formatGenderLabel(character.gender)}</dd>
+        </div>
+        <div className="metric">
+          <dt>Class</dt>
+          <dd>{formatCharacterClassLabel(character.characterClass)}</dd>
         </div>
         <div className="metric">
           <dt>Experience</dt>

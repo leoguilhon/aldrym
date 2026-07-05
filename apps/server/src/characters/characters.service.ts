@@ -62,14 +62,15 @@ export class CharactersService {
           data: {
             userId,
             name: createCharacterDto.name,
-            gender: createCharacterDto.gender
+            gender: createCharacterDto.gender,
+            characterClass: createCharacterDto.characterClass
           }
         });
 
         await tx.characterItem.create({
           data: {
             characterId: createdCharacter.id,
-            itemKey: "basic_backpack",
+            itemKey: "brown_backpack",
             quantity: 1,
             locationType: EQUIPMENT_LOCATION,
             equipmentSlot: "backpack"

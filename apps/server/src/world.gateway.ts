@@ -11,6 +11,7 @@ import type {
   CorpseErrorEvent,
   CorpseAddItemRequest,
   CorpseDropItemRequest,
+  CorpseMoveRequest,
   CorpseOpenRequest,
   CorpseRemovedEvent,
   CorpseTakeItemRequest,
@@ -88,6 +89,7 @@ const PLAYER_ATTACK_INTERVAL_MS = 1200;
 const RESPAWN_WARNING_MS = 3000;
 const EMPTY_CORPSE_DECAY_MS = 15000;
 const ITEM_THROW_RANGE = 5;
+const CORPSE_MOVE_RANGE = 2;
 
 type WorldSocket = Socket<
   WorldClientToServerEvents,
@@ -228,8 +230,13 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         socketId: client.id,
         userId: user.id,
         characterId: character.id,
+        characterClass: character.characterClass,
         name: character.name,
         level: character.level,
+        health: character.health,
+        maxHealth: character.maxHealth,
+        mana: character.mana,
+        maxMana: character.maxMana,
         position
       };
 
@@ -427,6 +434,79 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     client.emit(worldEventNames.corpseOpened, {
       corpse
     });
+  }
+
+  @SubscribeMessage(worldEventNames.corpseMove)
+  handleCorpseMove(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: CorpseMoveRequest
+  ): void {
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!activePlayer) {
+      this.emitCorpseError(client, "Join the world before moving corpses.", "world_join_required");
+      return;
+    }
+
+    const corpseId = payload?.corpseId?.trim();
+    const targetPosition = this.normalizeDropPosition(payload?.position);
+
+    if (!corpseId || !targetPosition) {
+      this.emitCorpseError(client, "A corpse and valid tile are required.", "invalid_corpse_move_request");
+      return;
+    }
+
+    if (!this.tryLockCorpse(corpseId)) {
+      this.emitCorpseError(client, "That corpse is already being updated.", "corpse_busy");
+      return;
+    }
+
+    try {
+      const corpse = this.worldStateService.getCorpse(corpseId);
+
+      if (!corpse) {
+        this.emitCorpseError(client, "That corpse is gone.", "corpse_not_found");
+        return;
+      }
+
+      if (!this.isInDirectContact(activePlayer.position, corpse)) {
+        this.emitCorpseError(client, "You need to stand on the corpse tile or on any adjacent tile.", "corpse_too_far");
+        return;
+      }
+
+      if (!this.isWithinCorpseMoveRange(activePlayer.position, targetPosition)) {
+        this.emitCorpseError(client, "You can only move corpses up to 2 SQM away.", "corpse_move_tile_too_far");
+        return;
+      }
+
+      if (!this.hasLineOfSight(activePlayer.position, targetPosition)) {
+        this.emitCorpseError(client, "A wall blocks that drag.", "corpse_move_line_blocked");
+        return;
+      }
+
+      if (!isWalkableTile(this.localMap, targetPosition)) {
+        this.emitCorpseError(client, "Corpses cannot be moved there.", "corpse_move_tile_blocked");
+        return;
+      }
+
+      if (this.worldStateService.isAliveMonsterAt(targetPosition)) {
+        this.emitCorpseError(client, "A creature blocks that tile.", "corpse_move_tile_occupied");
+        return;
+      }
+
+      const movedCorpse = this.worldStateService.moveCorpse(corpse.id, targetPosition);
+
+      if (!movedCorpse) {
+        this.emitCorpseError(client, "That corpse is gone.", "corpse_not_found");
+        return;
+      }
+
+      this.server.emit(worldEventNames.corpseUpdated, {
+        corpse: movedCorpse
+      });
+    } finally {
+      this.releaseCorpseLock(corpseId);
+    }
   }
 
   @SubscribeMessage(worldEventNames.corpseTakeItem)
@@ -1203,7 +1283,13 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       );
       const updatedCharacter = result.character;
 
-      this.worldStateService.updatePlayerLevel(client.id, updatedCharacter.level);
+      const updatedWorldPlayer = this.worldStateService.updatePlayerStats(client.id, {
+        level: updatedCharacter.level,
+        health: updatedCharacter.health,
+        maxHealth: updatedCharacter.maxHealth,
+        mana: updatedCharacter.mana,
+        maxMana: updatedCharacter.maxMana
+      });
 
       const experiencePayload: CharacterExperienceUpdatedEvent = {
         characterId: updatedCharacter.id,
@@ -1217,6 +1303,12 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       };
 
       client.emit(worldEventNames.characterExperienceUpdated, experiencePayload);
+
+      if (updatedWorldPlayer) {
+        this.server.emit(worldEventNames.playerMoved, {
+          player: this.worldStateService.toWorldPlayer(updatedWorldPlayer)
+        });
+      }
 
       if (result.leveledUp) {
         const levelUpPayload: CharacterLevelUpEvent = {
@@ -1628,6 +1720,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
   private isWithinItemThrowRange(player: Position, target: Position): boolean {
     return player.z === target.z && Math.max(Math.abs(player.x - target.x), Math.abs(player.y - target.y)) <= ITEM_THROW_RANGE;
+  }
+
+  private isWithinCorpseMoveRange(player: Position, target: Position): boolean {
+    const distance = Math.max(Math.abs(player.x - target.x), Math.abs(player.y - target.y));
+    return player.z === target.z && distance > 0 && distance <= CORPSE_MOVE_RANGE;
   }
 
   private hasLineOfSight(origin: Position, target: Position): boolean {

@@ -1,30 +1,42 @@
 import { getMovementCooldownMs, getMovementTweenDurationMs } from "@aldrym/shared";
-import type { Corpse, GroundItem, MoveDirection, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type { Corpse, GroundItem, InventoryMoveTarget, MoveDirection, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
 import Phaser from "phaser";
 
 import {
-  LOCAL_TILE_PALETTE,
+  getNextPosition,
   getTileCenter,
   getTileType,
+  isWalkableTile,
   type LocalMapData
 } from "../map/localMap";
 
 interface PlayerView {
   container: Phaser.GameObjects.Container;
+  facing: CardinalDirection;
+  healthBack: Phaser.GameObjects.Rectangle;
+  healthBar: Phaser.GameObjects.Rectangle;
   label: Phaser.GameObjects.Text;
+  manaBack: Phaser.GameObjects.Rectangle;
+  manaBar: Phaser.GameObjects.Rectangle;
+  outfitTextureKey: OutfitTextureKey;
+  shadow: Phaser.GameObjects.Ellipse;
+  sprite: Phaser.GameObjects.Sprite;
+  walkPhase: number;
 }
 
 interface MonsterView {
   alive: boolean;
-  body: Phaser.GameObjects.Ellipse;
   container: Phaser.GameObjects.Container;
-  detail: Phaser.GameObjects.Rectangle;
+  facing: CardinalDirection;
   healthBack: Phaser.GameObjects.Rectangle;
   healthBar: Phaser.GameObjects.Rectangle;
   hitArea: Phaser.GameObjects.Zone;
   label: Phaser.GameObjects.Text;
+  monsterType: WorldMonster["type"];
   shadow: Phaser.GameObjects.Ellipse;
+  sprite: Phaser.GameObjects.Sprite;
   tileMarker: Phaser.GameObjects.Rectangle;
+  walkPhase: number;
 }
 
 interface CorpseView {
@@ -38,7 +50,7 @@ interface CorpseView {
 }
 
 interface GroundItemView {
-  body: Phaser.GameObjects.Rectangle;
+  body: Phaser.GameObjects.Image;
   container: Phaser.GameObjects.Container;
   highlight: Phaser.GameObjects.Rectangle;
   hitArea: Phaser.GameObjects.Zone;
@@ -60,25 +72,74 @@ export interface MainSceneOptions {
   map: LocalMapData;
   monsters: WorldMonster[];
   onAttackMonster?: (monsterId: string) => void;
+  onMoveCorpse?: (corpseId: string, position: Position) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
   onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   onOpenCorpse?: (corpseId: string) => void;
+  onShowNotice?: (message: string) => void;
   onTakeGroundItem?: (groundItemId: string) => void;
+  onTakeGroundItemToTarget?: (
+    groundItemId: string,
+    target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>
+  ) => void;
 }
 
 const CAMERA_ZOOM = 2;
 const MONSTER_HEALTH_BAR_WIDTH = 24;
+const MONSTER_HEALTH_BAR_HEIGHT = 4;
+const PLAYER_RESOURCE_BAR_WIDTH = 28;
+const PLAYER_RESOURCE_BAR_HEIGHT = 3;
 const RESPAWN_WARNING_MS = 3000;
+type CardinalDirection = "south" | "north" | "east" | "west";
+type AnimationState = "idle" | "walk-a" | "walk-b";
+type InventoryContainerOrEquipmentTarget = Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>;
+type AutoInteraction =
+  | { type: "open-corpse"; corpseId: string }
+  | { type: "move-corpse"; corpseId: string; position: Position }
+  | { type: "take-ground-item"; groundItemId: string }
+  | { type: "take-ground-item-to-target"; groundItemId: string; target: InventoryContainerOrEquipmentTarget }
+  | { type: "move-ground-item"; groundItemId: string; position: Position };
+const tileTextureKeys = {
+  dirt: "tile-dirt",
+  grass: "tile-grass",
+  stone: "tile-stone",
+  wall: "tile-wall",
+  water: "tile-water"
+} as const;
+const monsterTextureKeys: Record<WorldMonster["type"], string> = {
+  rat: "monster-rat",
+  troll: "monster-troll"
+};
+const outfitTextureKeys = {
+  druid: "outfit-druid",
+  hunter: "outfit-hunter",
+  knight: "outfit-knight",
+  sorcerer: "outfit-sorcerer"
+} as const;
+type OutfitTextureKey = (typeof outfitTextureKeys)[keyof typeof outfitTextureKeys];
+const itemTextureKeys = {
+  brown_backpack: "item-brown-backpack",
+  chipped_dagger: "item-chipped-dagger",
+  gold_coin: "item-gold-coin"
+} as const;
+const cardinalDirections: CardinalDirection[] = ["south", "north", "east", "west"];
+const pathMoveDirections: MoveDirection[] = ["up-left", "up-right", "down-left", "down-right", "up", "down", "left", "right"];
 
 export class MainScene extends Phaser.Scene {
   private activeCombatMonsterId: string | null;
   private readonly localCharacterId: string;
   private readonly map: LocalMapData;
   private readonly onAttackMonster?: (monsterId: string) => void;
+  private readonly onMoveCorpse?: (corpseId: string, position: Position) => void;
   private readonly onMoveIntent?: (direction: MoveDirection) => void;
   private readonly onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   private readonly onOpenCorpse?: (corpseId: string) => void;
+  private readonly onShowNotice?: (message: string) => void;
   private readonly onTakeGroundItem?: (groundItemId: string) => void;
+  private readonly onTakeGroundItemToTarget?: (
+    groundItemId: string,
+    target: InventoryContainerOrEquipmentTarget
+  ) => void;
   private readonly pressedMovementCodes = new Set<string>();
   private nextMoveAt = 0;
   private isSceneReady = false;
@@ -92,9 +153,12 @@ export class MainScene extends Phaser.Scene {
   private readonly playerViews = new Map<string, PlayerView>();
   private readonly respawnWarningTimers = new Map<string, Phaser.Time.TimerEvent>();
   private readonly respawnWarningViews = new Map<string, RespawnWarningView>();
+  private clickWalkTarget: Position | null = null;
+  private draggedCorpseId: string | null = null;
   private draggedGroundItemId: string | null = null;
   private hoveredCorpseId: string | null = null;
   private hoveredGroundItemId: string | null = null;
+  private pendingAutoInteraction: AutoInteraction | null = null;
 
   constructor(options: MainSceneOptions) {
     super({ key: "main-scene" });
@@ -102,17 +166,56 @@ export class MainScene extends Phaser.Scene {
     this.localCharacterId = options.localCharacterId;
     this.map = options.map;
     this.onAttackMonster = options.onAttackMonster;
+    this.onMoveCorpse = options.onMoveCorpse;
     this.onMoveIntent = options.onMoveIntent;
     this.onMoveGroundItem = options.onMoveGroundItem;
     this.onOpenCorpse = options.onOpenCorpse;
+    this.onShowNotice = options.onShowNotice;
     this.onTakeGroundItem = options.onTakeGroundItem;
+    this.onTakeGroundItemToTarget = options.onTakeGroundItemToTarget;
     this.pendingCorpses = options.corpses;
     this.pendingGroundItems = options.groundItems;
     this.pendingMonsters = options.monsters;
     this.pendingPlayers = options.initialPlayers;
   }
 
+  preload(): void {
+    this.load.image(tileTextureKeys.grass, "/assets/tiles/grass.png");
+    this.load.image(tileTextureKeys.dirt, "/assets/tiles/dirt.png");
+    this.load.image(tileTextureKeys.stone, "/assets/tiles/stone.png");
+    this.load.image(tileTextureKeys.water, "/assets/tiles/water.png");
+    this.load.image(tileTextureKeys.wall, "/assets/tiles/wall.png");
+    this.load.spritesheet(monsterTextureKeys.rat, "/assets/spritesheets/monsters/rat.png", {
+      frameHeight: 64,
+      frameWidth: 64
+    });
+    this.load.spritesheet(monsterTextureKeys.troll, "/assets/spritesheets/monsters/troll.png", {
+      frameHeight: 96,
+      frameWidth: 96
+    });
+    this.load.spritesheet(outfitTextureKeys.knight, "/assets/spritesheets/outfits/knight.png", {
+      frameHeight: 64,
+      frameWidth: 64
+    });
+    this.load.spritesheet(outfitTextureKeys.druid, "/assets/spritesheets/outfits/druid.png", {
+      frameHeight: 64,
+      frameWidth: 64
+    });
+    this.load.spritesheet(outfitTextureKeys.sorcerer, "/assets/spritesheets/outfits/sorcerer.png", {
+      frameHeight: 64,
+      frameWidth: 64
+    });
+    this.load.spritesheet(outfitTextureKeys.hunter, "/assets/spritesheets/outfits/hunter.png", {
+      frameHeight: 64,
+      frameWidth: 64
+    });
+    this.load.image(itemTextureKeys.chipped_dagger, "/assets/items/chipped_dagger.png");
+    this.load.image(itemTextureKeys.gold_coin, "/assets/items/gold_coin.png");
+    this.load.image(itemTextureKeys.brown_backpack, "/assets/items/brown_backpack.png");
+  }
+
   create(): void {
+    this.createDirectionalAnimations();
     this.drawMap();
     this.createControls();
     this.configureCamera();
@@ -122,10 +225,12 @@ export class MainScene extends Phaser.Scene {
     this.syncMonsters(this.pendingMonsters);
     this.syncPlayers(this.pendingPlayers);
     window.addEventListener("aldrym:item-drag-start", this.clearMovementInput);
+    window.addEventListener("aldrym:ground-item-target-drop", this.handleGroundItemTargetDrop);
     this.input.on(Phaser.Input.Events.POINTER_UP, this.handlePointerUp, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.resetCorpseCursor());
     this.events.once(Phaser.Scenes.Events.DESTROY, () => {
       window.removeEventListener("aldrym:item-drag-start", this.clearMovementInput);
+      window.removeEventListener("aldrym:ground-item-target-drop", this.handleGroundItemTargetDrop);
       this.input.off(Phaser.Input.Events.POINTER_UP, this.handlePointerUp, this);
       this.resetCorpseCursor();
     });
@@ -138,12 +243,25 @@ export class MainScene extends Phaser.Scene {
 
     const direction = this.getRequestedDirection();
 
-    if (!direction) {
+    if (direction) {
+      this.clickWalkTarget = null;
+      this.pendingAutoInteraction = null;
+      this.emitMoveIntent(direction, time);
       return;
     }
 
+    const clickWalkDirection = this.getClickWalkDirection();
+
+    if (!clickWalkDirection) {
+      return;
+    }
+
+    this.emitMoveIntent(clickWalkDirection, time);
+  }
+
+  private emitMoveIntent(direction: MoveDirection, time: number): void {
     this.nextMoveAt = time + getMovementCooldownMs(this.getLocalPlayerLevel(), direction);
-    this.onMoveIntent(direction);
+    this.onMoveIntent?.(direction);
   }
 
   setMonsters(monsters: WorldMonster[]): void {
@@ -171,6 +289,7 @@ export class MainScene extends Phaser.Scene {
 
     if (this.isSceneReady) {
       this.syncPlayers(this.pendingPlayers);
+      this.flushPendingAutoInteraction();
     }
   }
 
@@ -215,12 +334,11 @@ export class MainScene extends Phaser.Scene {
   }
 
   private drawMap(): void {
-    const graphics = this.add.graphics();
     const worldWidth = this.map.width * this.map.tileSize;
     const worldHeight = this.map.height * this.map.tileSize;
+    const background = this.add.rectangle(0, 0, worldWidth, worldHeight, 0x120c08, 1);
 
-    graphics.fillStyle(0x120c08, 1);
-    graphics.fillRect(0, 0, worldWidth, worldHeight);
+    background.setOrigin(0);
 
     for (let y = 0; y < this.map.height; y += 1) {
       for (let x = 0; x < this.map.width; x += 1) {
@@ -230,38 +348,13 @@ export class MainScene extends Phaser.Scene {
           continue;
         }
 
-        const palette = LOCAL_TILE_PALETTE[tileType];
         const worldX = x * this.map.tileSize;
         const worldY = y * this.map.tileSize;
+        const tile = this.add.image(worldX, worldY, tileTextureKeys[tileType]);
 
-        graphics.fillStyle(palette.edgeColor, 1);
-        graphics.fillRect(worldX, worldY, this.map.tileSize, this.map.tileSize);
-
-        graphics.fillStyle(palette.baseColor, 1);
-        graphics.fillRect(worldX + 1, worldY + 1, this.map.tileSize - 2, this.map.tileSize - 2);
-
-        if (tileType === "grass") {
-          graphics.fillStyle(palette.accentColor, 0.18);
-          graphics.fillRect(worldX + 5, worldY + 4, this.map.tileSize - 10, 7);
-          graphics.fillRect(worldX + 8, worldY + 16, this.map.tileSize - 16, 6);
-        } else if (tileType === "dirt") {
-          graphics.fillStyle(palette.accentColor, 0.24);
-          graphics.fillRect(worldX + 4, worldY + 6, this.map.tileSize - 12, 5);
-          graphics.fillRect(worldX + 10, worldY + 17, this.map.tileSize - 14, 4);
-        } else if (tileType === "stone") {
-          graphics.fillStyle(palette.accentColor, 0.22);
-          graphics.fillRect(worldX + 4, worldY + 4, this.map.tileSize - 8, 9);
-          graphics.fillRect(worldX + 7, worldY + 18, this.map.tileSize - 14, 4);
-        } else if (tileType === "water") {
-          graphics.fillStyle(palette.accentColor, 0.2);
-          graphics.fillRect(worldX + 4, worldY + 5, this.map.tileSize - 8, 5);
-          graphics.fillRect(worldX + 9, worldY + 17, this.map.tileSize - 18, 4);
-        } else if (tileType === "wall") {
-          graphics.fillStyle(palette.accentColor, 0.3);
-          graphics.fillRect(worldX + 4, worldY + 4, this.map.tileSize - 8, 5);
-          graphics.fillStyle(0x1e1714, 0.35);
-          graphics.fillRect(worldX + 4, worldY + this.map.tileSize - 8, this.map.tileSize - 8, 4);
-        }
+        tile.setOrigin(0);
+        tile.setDisplaySize(this.map.tileSize, this.map.tileSize);
+        tile.setDepth(tileType === "wall" ? 3 : 1);
       }
     }
   }
@@ -297,6 +390,126 @@ export class MainScene extends Phaser.Scene {
     camera.setBounds(0, 0, worldWidth, worldHeight);
     camera.setRoundPixels(true);
     camera.setZoom(CAMERA_ZOOM);
+  }
+
+  private createDirectionalAnimations(): void {
+    const animatedTextureKeys = [
+      ...Object.values(outfitTextureKeys),
+      ...Object.values(monsterTextureKeys)
+    ];
+
+    for (const textureKey of animatedTextureKeys) {
+      for (const [directionIndex, direction] of cardinalDirections.entries()) {
+        const rowStartFrame = directionIndex * 4;
+        this.createAnimationIfMissing(this.getAnimationKey(textureKey, direction, "idle"), textureKey, [rowStartFrame], 1);
+        this.createAnimationIfMissing(
+          this.getAnimationKey(textureKey, direction, "walk-a"),
+          textureKey,
+          [rowStartFrame, rowStartFrame + 2, rowStartFrame, rowStartFrame + 3],
+          8
+        );
+        this.createAnimationIfMissing(
+          this.getAnimationKey(textureKey, direction, "walk-b"),
+          textureKey,
+          [rowStartFrame, rowStartFrame + 3, rowStartFrame, rowStartFrame + 2],
+          8
+        );
+      }
+    }
+  }
+
+  private createAnimationIfMissing(key: string, textureKey: string, frames: number[], frameRate: number): void {
+    if (this.anims.exists(key)) {
+      this.anims.remove(key);
+    }
+
+    this.anims.create({
+      key,
+      frames: frames.map((frame) => ({
+        key: textureKey,
+        frame
+      })),
+      frameRate,
+      repeat: -1
+    });
+  }
+
+  private getAnimationKey(textureKey: string, direction: CardinalDirection, state: AnimationState): string {
+    return `${textureKey}-${direction}-${state}`;
+  }
+
+  private playDirectionalAnimation(
+    sprite: Phaser.GameObjects.Sprite,
+    textureKey: string,
+    direction: CardinalDirection,
+    state: AnimationState
+  ): void {
+    sprite.anims.play(this.getAnimationKey(textureKey, direction, state), true);
+  }
+
+  private takeNextWalkAnimationState(view: { walkPhase: number }): AnimationState {
+    const state = view.walkPhase % 2 === 0 ? "walk-a" : "walk-b";
+    view.walkPhase += 1;
+
+    return state;
+  }
+
+  private inferFacingDirection(
+    from: Pick<Position, "x" | "y">,
+    to: Pick<Position, "x" | "y">,
+    fallback: CardinalDirection
+  ): CardinalDirection {
+    const deltaX = to.x - from.x;
+    const deltaY = to.y - from.y;
+
+    if (deltaX === 0 && deltaY === 0) {
+      return fallback;
+    }
+
+    if (Math.abs(deltaX) > Math.abs(deltaY)) {
+      return deltaX > 0 ? "east" : "west";
+    }
+
+    return deltaY > 0 ? "south" : "north";
+  }
+
+  private inferTweenMoveDirection(from: Pick<Position, "x" | "y">, to: Pick<Position, "x" | "y">): MoveDirection | undefined {
+    const deltaX = Math.sign(to.x - from.x);
+    const deltaY = Math.sign(to.y - from.y);
+
+    if (deltaX < 0 && deltaY < 0) {
+      return "up-left";
+    }
+
+    if (deltaX > 0 && deltaY < 0) {
+      return "up-right";
+    }
+
+    if (deltaX < 0 && deltaY > 0) {
+      return "down-left";
+    }
+
+    if (deltaX > 0 && deltaY > 0) {
+      return "down-right";
+    }
+
+    if (deltaY < 0) {
+      return "up";
+    }
+
+    if (deltaY > 0) {
+      return "down";
+    }
+
+    if (deltaX < 0) {
+      return "left";
+    }
+
+    if (deltaX > 0) {
+      return "right";
+    }
+
+    return undefined;
   }
 
   private getRequestedDirection(): MoveDirection | null {
@@ -335,6 +548,287 @@ export class MainScene extends Phaser.Scene {
     return null;
   }
 
+  private getClickWalkDirection(): MoveDirection | null {
+    if (!this.clickWalkTarget) {
+      return null;
+    }
+
+    const localPlayer = this.getLocalPlayerPosition();
+
+    if (!localPlayer || localPlayer.z !== this.clickWalkTarget.z) {
+      this.clickWalkTarget = null;
+      return null;
+    }
+
+    if (this.isSameTile(localPlayer, this.clickWalkTarget)) {
+      this.clickWalkTarget = null;
+      return null;
+    }
+
+    const path = this.findPathToTile(localPlayer, this.clickWalkTarget);
+
+    if (path.length === 0) {
+      this.clickWalkTarget = null;
+      return null;
+    }
+
+    return path[0];
+  }
+
+  private findPathToTile(start: Position, target: Position): MoveDirection[] {
+    if (!this.isTileAvailableForClickWalk(target)) {
+      return [];
+    }
+
+    const startKey = this.getPositionKey(start);
+    const targetKey = this.getPositionKey(target);
+    const queue: Position[] = [start];
+    const visited = new Set<string>([startKey]);
+    const cameFrom = new Map<string, { direction: MoveDirection; previousKey: string }>();
+
+    for (let index = 0; index < queue.length; index += 1) {
+      const current = queue[index];
+      const sortedDirections = this.getPathDirectionsToward(current, target);
+
+      for (const direction of sortedDirections) {
+        const nextPosition = getNextPosition(current, direction);
+        const nextKey = this.getPositionKey(nextPosition);
+
+        if (visited.has(nextKey) || !this.isTileAvailableForClickWalk(nextPosition)) {
+          continue;
+        }
+
+        cameFrom.set(nextKey, {
+          direction,
+          previousKey: this.getPositionKey(current)
+        });
+
+        if (nextKey === targetKey) {
+          return this.reconstructPath(cameFrom, startKey, targetKey);
+        }
+
+        visited.add(nextKey);
+        queue.push(nextPosition);
+      }
+    }
+
+    return [];
+  }
+
+  private getPathDirectionsToward(current: Position, target: Position): MoveDirection[] {
+    const deltaX = Math.sign(target.x - current.x);
+    const deltaY = Math.sign(target.y - current.y);
+    const preferredDirections: MoveDirection[] = [];
+
+    if (deltaX < 0 && deltaY < 0) {
+      preferredDirections.push("up-left");
+    } else if (deltaX > 0 && deltaY < 0) {
+      preferredDirections.push("up-right");
+    } else if (deltaX < 0 && deltaY > 0) {
+      preferredDirections.push("down-left");
+    } else if (deltaX > 0 && deltaY > 0) {
+      preferredDirections.push("down-right");
+    }
+
+    if (deltaY < 0) {
+      preferredDirections.push("up");
+    } else if (deltaY > 0) {
+      preferredDirections.push("down");
+    }
+
+    if (deltaX < 0) {
+      preferredDirections.push("left");
+    } else if (deltaX > 0) {
+      preferredDirections.push("right");
+    }
+
+    return [...preferredDirections, ...pathMoveDirections.filter((direction) => !preferredDirections.includes(direction))];
+  }
+
+  private reconstructPath(
+    cameFrom: Map<string, { direction: MoveDirection; previousKey: string }>,
+    startKey: string,
+    targetKey: string
+  ): MoveDirection[] {
+    const path: MoveDirection[] = [];
+    let currentKey = targetKey;
+
+    while (currentKey !== startKey) {
+      const step = cameFrom.get(currentKey);
+
+      if (!step) {
+        return [];
+      }
+
+      path.unshift(step.direction);
+      currentKey = step.previousKey;
+    }
+
+    return path;
+  }
+
+  private getLocalPlayerPosition(): Position | null {
+    const player = this.pendingPlayers.find((worldPlayer) => worldPlayer.characterId === this.localCharacterId);
+
+    return player ? { x: player.x, y: player.y, z: player.z } : null;
+  }
+
+  private isInDirectContact(left: Pick<Position, "x" | "y" | "z">, right: Pick<Position, "x" | "y" | "z">): boolean {
+    if (left.z !== right.z) {
+      return false;
+    }
+
+    return Math.max(Math.abs(left.x - right.x), Math.abs(left.y - right.y)) <= 1;
+  }
+
+  private runOrQueueAutoInteraction(source: Position, action: AutoInteraction, failureMessage: string): void {
+    const localPlayer = this.getLocalPlayerPosition();
+
+    if (!localPlayer) {
+      this.onShowNotice?.("You need to enter the world first.");
+      return;
+    }
+
+    if (this.isInDirectContact(localPlayer, source)) {
+      this.pendingAutoInteraction = null;
+      this.clickWalkTarget = null;
+      this.executeAutoInteraction(action);
+      return;
+    }
+
+    const interactionPosition = this.findReachableInteractionPosition(localPlayer, source);
+
+    if (!interactionPosition) {
+      this.pendingAutoInteraction = null;
+      this.clickWalkTarget = null;
+      this.onShowNotice?.(failureMessage);
+      return;
+    }
+
+    this.pendingAutoInteraction = action;
+    this.pressedMovementCodes.clear();
+    this.clickWalkTarget = interactionPosition;
+  }
+
+  private findReachableInteractionPosition(localPlayer: Position, source: Position): Position | null {
+    if (localPlayer.z !== source.z) {
+      return null;
+    }
+
+    const candidates: Position[] = [];
+
+    for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
+      for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+        candidates.push({
+          x: source.x + xOffset,
+          y: source.y + yOffset,
+          z: source.z
+        });
+      }
+    }
+
+    const reachableCandidates = candidates
+      .filter((candidate) => this.isTileAvailableForClickWalk(candidate))
+      .map((candidate) => {
+        if (this.isSameTile(localPlayer, candidate)) {
+          return {
+            candidate,
+            pathLength: 0
+          };
+        }
+
+        const path = this.findPathToTile(localPlayer, candidate);
+
+        return {
+          candidate,
+          pathLength: path.length > 0 ? path.length : Number.POSITIVE_INFINITY
+        };
+      })
+      .filter((candidate) => Number.isFinite(candidate.pathLength))
+      .sort((left, right) => {
+        if (left.pathLength !== right.pathLength) {
+          return left.pathLength - right.pathLength;
+        }
+
+        const leftDistance = Math.max(Math.abs(left.candidate.x - localPlayer.x), Math.abs(left.candidate.y - localPlayer.y));
+        const rightDistance = Math.max(Math.abs(right.candidate.x - localPlayer.x), Math.abs(right.candidate.y - localPlayer.y));
+
+        return leftDistance - rightDistance;
+      });
+
+    return reachableCandidates[0]?.candidate ?? null;
+  }
+
+  private flushPendingAutoInteraction(): void {
+    if (!this.pendingAutoInteraction) {
+      return;
+    }
+
+    const source = this.getAutoInteractionSource(this.pendingAutoInteraction);
+    const localPlayer = this.getLocalPlayerPosition();
+
+    if (!source || !localPlayer) {
+      this.pendingAutoInteraction = null;
+      this.clickWalkTarget = null;
+      return;
+    }
+
+    if (!this.isInDirectContact(localPlayer, source)) {
+      return;
+    }
+
+    const action = this.pendingAutoInteraction;
+    this.pendingAutoInteraction = null;
+    this.clickWalkTarget = null;
+    this.executeAutoInteraction(action);
+  }
+
+  private getAutoInteractionSource(action: AutoInteraction): Position | null {
+    if (action.type === "open-corpse" || action.type === "move-corpse") {
+      const corpse = this.pendingCorpses.find((currentCorpse) => currentCorpse.id === action.corpseId);
+      return corpse ? { x: corpse.x, y: corpse.y, z: corpse.z } : null;
+    }
+
+    const groundItem = this.pendingGroundItems.find((currentGroundItem) => currentGroundItem.id === action.groundItemId);
+    return groundItem ? { x: groundItem.x, y: groundItem.y, z: groundItem.z } : null;
+  }
+
+  private executeAutoInteraction(action: AutoInteraction): void {
+    switch (action.type) {
+      case "open-corpse":
+        this.onOpenCorpse?.(action.corpseId);
+        return;
+      case "move-corpse":
+        this.onMoveCorpse?.(action.corpseId, action.position);
+        return;
+      case "take-ground-item":
+        this.onTakeGroundItem?.(action.groundItemId);
+        return;
+      case "take-ground-item-to-target":
+        this.onTakeGroundItemToTarget?.(action.groundItemId, action.target);
+        return;
+      case "move-ground-item":
+        this.onMoveGroundItem?.(action.groundItemId, action.position);
+        return;
+    }
+  }
+
+  private isTileAvailableForClickWalk(position: Position): boolean {
+    if (!isWalkableTile(this.map, position)) {
+      return false;
+    }
+
+    return !this.pendingMonsters.some((monster) => monster.alive && this.isSameTile(monster, position));
+  }
+
+  private isSameTile(left: Pick<Position, "x" | "y" | "z">, right: Pick<Position, "x" | "y" | "z">): boolean {
+    return left.x === right.x && left.y === right.y && left.z === right.z;
+  }
+
+  private getPositionKey(position: Pick<Position, "x" | "y" | "z">): string {
+    return `${position.x}:${position.y}:${position.z}`;
+  }
+
   private isMovementCode(code: string): boolean {
     return (
       code === "ArrowUp" ||
@@ -354,15 +848,45 @@ export class MainScene extends Phaser.Scene {
 
   private readonly clearMovementInput = (): void => {
     this.pressedMovementCodes.clear();
+    this.clickWalkTarget = null;
+    this.pendingAutoInteraction = null;
+  };
+
+  private readonly handleGroundItemTargetDrop = (event: Event): void => {
+    const detail = (event as CustomEvent<{
+      groundItemId?: string;
+      target?: InventoryContainerOrEquipmentTarget;
+    }>).detail;
+    const groundItemId = detail?.groundItemId?.trim();
+    const target = detail?.target;
+
+    if (!groundItemId || !target || (target.locationType !== "container" && target.locationType !== "equipment")) {
+      return;
+    }
+
+    const groundItem = this.pendingGroundItems.find((currentGroundItem) => currentGroundItem.id === groundItemId);
+
+    if (!groundItem) {
+      this.onShowNotice?.("That item is no longer on the ground.");
+      return;
+    }
+
+    this.runOrQueueAutoInteraction(
+      groundItem,
+      {
+        type: "take-ground-item-to-target",
+        groundItemId,
+        target
+      },
+      "There is no path to that item."
+    );
   };
 
   private readonly handlePointerUp = (pointer: Phaser.Input.Pointer): void => {
+    const corpseId = this.draggedCorpseId;
     const groundItemId = this.draggedGroundItemId;
+    this.draggedCorpseId = null;
     this.draggedGroundItemId = null;
-
-    if (!groundItemId || !this.onMoveGroundItem) {
-      return;
-    }
 
     const position = this.getTilePositionFromWorldPoint(pointer.worldX, pointer.worldY);
 
@@ -370,7 +894,70 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
-    this.onMoveGroundItem(groundItemId, position);
+    if (corpseId) {
+      const corpse = this.pendingCorpses.find((currentCorpse) => currentCorpse.id === corpseId);
+
+      if (!corpse) {
+        this.onShowNotice?.("That corpse is gone.");
+        return;
+      }
+
+      if (this.isSameTile(corpse, position)) {
+        return;
+      }
+
+      const localPlayer = this.getLocalPlayerPosition();
+
+      if (!localPlayer || !this.isInDirectContact(localPlayer, corpse)) {
+        this.runOrQueueAutoInteraction(
+          corpse,
+          {
+            type: "move-corpse",
+            corpseId,
+            position
+          },
+          "There is no path to that corpse."
+        );
+        return;
+      }
+
+      this.onMoveCorpse?.(corpseId, position);
+      return;
+    }
+
+    if (groundItemId) {
+      const groundItem = this.pendingGroundItems.find((currentGroundItem) => currentGroundItem.id === groundItemId);
+
+      if (!groundItem) {
+        this.onShowNotice?.("That item is no longer on the ground.");
+        return;
+      }
+
+      const localPlayer = this.getLocalPlayerPosition();
+
+      if (!localPlayer || !this.isInDirectContact(localPlayer, groundItem)) {
+        this.runOrQueueAutoInteraction(
+          groundItem,
+          {
+            type: "move-ground-item",
+            groundItemId,
+            position
+          },
+          "There is no path to that item."
+        );
+        return;
+      }
+
+      this.onMoveGroundItem?.(groundItemId, position);
+      return;
+    }
+
+    if (pointer.button !== 0 || !this.onMoveIntent) {
+      return;
+    }
+
+    this.pressedMovementCodes.clear();
+    this.clickWalkTarget = this.isTileAvailableForClickWalk(position) ? position : null;
   };
 
   private getTilePositionFromWorldPoint(worldX: number, worldY: number): Position | null {
@@ -471,42 +1058,98 @@ export class MainScene extends Phaser.Scene {
     }
 
     existingView.label.setText(player.name);
+    this.updatePlayerResourceBars(existingView, player);
     this.tweens.killTweensOf(existingView.container);
+    const nextDirection = this.inferFacingDirection(existingView.container, { x, y }, existingView.facing);
+    const isMoving = existingView.container.x !== x || existingView.container.y !== y;
+    existingView.facing = nextDirection;
+    const nextOutfitTextureKey = this.getPlayerOutfitTextureKey(player);
+
+    if (existingView.outfitTextureKey !== nextOutfitTextureKey) {
+      existingView.outfitTextureKey = nextOutfitTextureKey;
+      existingView.sprite.setTexture(nextOutfitTextureKey);
+    }
+
+    if (!isMoving) {
+      this.playDirectionalAnimation(existingView.sprite, existingView.outfitTextureKey, existingView.facing, "idle");
+      return;
+    }
+
+    this.playDirectionalAnimation(
+      existingView.sprite,
+      existingView.outfitTextureKey,
+      existingView.facing,
+      this.takeNextWalkAnimationState(existingView)
+    );
     this.tweens.add({
       targets: existingView.container,
       x,
       y,
-      duration: getMovementTweenDurationMs(player.level),
-      ease: "Quad.easeOut"
+      duration: getMovementTweenDurationMs(player.level, this.inferTweenMoveDirection(existingView.container, { x, y })),
+      ease: "Linear",
+      onComplete: () => {
+        this.playDirectionalAnimation(existingView.sprite, existingView.outfitTextureKey, existingView.facing, "idle");
+      }
     });
   }
 
   private createPlayerView(player: WorldPlayer, x: number, y: number): PlayerView {
     const isLocalPlayer = player.characterId === this.localCharacterId;
-    const label = this.add.text(0, -24, player.name, {
+    const outfitTextureKey = this.getPlayerOutfitTextureKey(player);
+    const label = this.add.text(0, -32, player.name, {
       color: "#f2e5c8",
       fontFamily: "Georgia",
       fontSize: "11px",
       stroke: "#120c08",
       strokeThickness: 3
     });
+    const healthBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -26, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
+    const healthBar = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2, -26, PLAYER_RESOURCE_BAR_WIDTH, PLAYER_RESOURCE_BAR_HEIGHT, 0x1fa143, 1);
+    const manaBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -21, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
+    const manaBar = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2, -21, PLAYER_RESOURCE_BAR_WIDTH, PLAYER_RESOURCE_BAR_HEIGHT, 0x2f6fd4, 1);
     const shadow = this.add.ellipse(0, 8, 18, 10, 0x000000, 0.28);
-    const body = this.add.rectangle(0, -3, 18, 22, isLocalPlayer ? 0xc79e62 : 0xa9a6a0, 1);
-    const tunic = this.add.rectangle(0, 0, 12, 12, isLocalPlayer ? 0x6c4b2f : 0x42546a, 1);
-    const head = this.add.ellipse(0, -13, 10, 10, 0xe6cfaa, 1);
+    const sprite = this.add.sprite(0, 14, outfitTextureKey, 0);
 
     label.setOrigin(0.5, 1);
-    body.setStrokeStyle(2, 0x2e1a10, 1);
-    tunic.setStrokeStyle(1, 0x3e2a19, 1);
-    head.setStrokeStyle(1, 0x72583c, 1);
-
-    const container = this.add.container(x, y, [label, shadow, body, tunic, head]);
-    container.setDepth(isLocalPlayer ? 20 : 16);
-
-    return {
-      container,
-      label
+    healthBack.setOrigin(0, 0.5);
+    healthBack.setStrokeStyle(1, 0xf0d18c, 0.22);
+    healthBar.setOrigin(0, 0.5);
+    manaBack.setOrigin(0, 0.5);
+    manaBack.setStrokeStyle(1, 0xf0d18c, 0.22);
+    manaBar.setOrigin(0, 0.5);
+    sprite.setOrigin(0.5, 1);
+    sprite.setDisplaySize(34, 34);
+    this.playDirectionalAnimation(sprite, outfitTextureKey, "south", "idle");
+    const view = {
+      facing: "south" as CardinalDirection,
+      container: this.add.container(x, y, [label, healthBack, healthBar, manaBack, manaBar, shadow, sprite]),
+      healthBack,
+      healthBar,
+      label,
+      manaBack,
+      manaBar,
+      outfitTextureKey,
+      shadow,
+      sprite,
+      walkPhase: 0
     };
+
+    view.container.setDepth(isLocalPlayer ? 20 : 16);
+    this.updatePlayerResourceBars(view, player);
+
+    return view;
+  }
+
+  private getPlayerOutfitTextureKey(player: WorldPlayer): OutfitTextureKey {
+    return outfitTextureKeys[player.characterClass] ?? outfitTextureKeys.knight;
+  }
+
+  private updatePlayerResourceBars(view: Pick<PlayerView, "healthBar" | "manaBar">, player: WorldPlayer): void {
+    const healthRatio = player.maxHealth > 0 ? Phaser.Math.Clamp(player.health / player.maxHealth, 0, 1) : 0;
+    const manaRatio = player.maxMana > 0 ? Phaser.Math.Clamp(player.mana / player.maxMana, 0, 1) : 0;
+
+    view.healthBar.setDisplaySize(Math.max(0, Math.ceil(PLAYER_RESOURCE_BAR_WIDTH * healthRatio)), PLAYER_RESOURCE_BAR_HEIGHT);
+    view.manaBar.setDisplaySize(Math.max(0, Math.ceil(PLAYER_RESOURCE_BAR_WIDTH * manaRatio)), PLAYER_RESOURCE_BAR_HEIGHT);
   }
 
   private upsertCorpseView(corpse: Corpse): void {
@@ -537,7 +1180,7 @@ export class MainScene extends Phaser.Scene {
     const shadow = this.add.ellipse(0, 8, 22, 8, 0x000000, 0.24);
     const body = this.add.ellipse(0, 3, 22, 12, corpse.isEmpty ? 0x4b3a2f : 0x6c4c34, 1);
     const cloth = this.add.rectangle(2, 1, 12, 4, corpse.isEmpty ? 0x6f5b46 : 0x9b7143, 0.65);
-    const tooltip = this.add.text(0, -31, "Open corpse", {
+    const tooltip = this.add.text(0, -31, "Drag corpse / Right-click open", {
       backgroundColor: "#2b1a10",
       color: "#f7df9f",
       fontFamily: "Georgia",
@@ -563,7 +1206,23 @@ export class MainScene extends Phaser.Scene {
     });
     hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (pointer.button === 2) {
-        this.onOpenCorpse?.(corpse.id);
+        const currentCorpse = this.pendingCorpses.find((pendingCorpse) => pendingCorpse.id === corpse.id) ?? corpse;
+
+        this.runOrQueueAutoInteraction(
+          currentCorpse,
+          {
+            type: "open-corpse",
+            corpseId: corpse.id
+          },
+          "There is no path to that corpse."
+        );
+        return;
+      }
+
+      if (pointer.button === 0) {
+        this.draggedCorpseId = corpse.id;
+        this.pressedMovementCodes.clear();
+        this.clickWalkTarget = null;
       }
     });
 
@@ -640,6 +1299,9 @@ export class MainScene extends Phaser.Scene {
 
     existingView.container.setPosition(x, y);
     existingView.label.setText(this.getGroundItemLabel(groundItem));
+    existingView.tooltip.setText(this.getGroundItemLabel(groundItem));
+    existingView.body.setTexture(this.getItemTextureKey(groundItem.itemKey));
+    this.updateGroundItemSpriteSize(existingView.body, groundItem.itemKey);
     existingView.quantity.setText(groundItem.quantity > 1 ? String(groundItem.quantity) : "");
   }
 
@@ -647,7 +1309,7 @@ export class MainScene extends Phaser.Scene {
     const highlight = this.add.rectangle(0, 0, this.map.tileSize - 8, this.map.tileSize - 8, 0xc9a25d, 0.06);
     const hitArea = this.add.zone(0, 0, this.map.tileSize, this.map.tileSize);
     const shadow = this.add.ellipse(0, 8, 18, 7, 0x000000, 0.24);
-    const body = this.add.rectangle(0, 2, 12, 12, this.getGroundItemColor(groundItem), 1);
+    const body = this.add.image(0, 3, this.getItemTextureKey(groundItem.itemKey));
     const quantity = this.add.text(9, 7, groundItem.quantity > 1 ? String(groundItem.quantity) : "", {
       color: "#fff1bf",
       fontFamily: "Georgia",
@@ -662,7 +1324,7 @@ export class MainScene extends Phaser.Scene {
       stroke: "#120c08",
       strokeThickness: 3
     });
-    const tooltip = this.add.text(0, -29, "Pick up", {
+    const tooltip = this.add.text(0, -29, this.getGroundItemLabel(groundItem), {
       backgroundColor: "#2b1a10",
       color: "#f7df9f",
       fontFamily: "Georgia",
@@ -673,10 +1335,11 @@ export class MainScene extends Phaser.Scene {
     });
 
     highlight.setStrokeStyle(1, 0xc9a25d, 0.48);
-    body.setStrokeStyle(1, 0x2e1a10, 1);
-    body.setAngle(45);
+    body.setOrigin(0.5);
+    this.updateGroundItemSpriteSize(body, groundItem.itemKey);
     quantity.setOrigin(1, 1);
     label.setOrigin(0.5, 1);
+    label.setVisible(false);
     tooltip.setOrigin(0.5, 1);
     tooltip.setVisible(false);
     hitArea.setOrigin(0.5);
@@ -689,7 +1352,16 @@ export class MainScene extends Phaser.Scene {
     });
     hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (pointer.button === 2) {
-        this.onTakeGroundItem?.(groundItem.id);
+        const currentGroundItem = this.pendingGroundItems.find((pendingGroundItem) => pendingGroundItem.id === groundItem.id) ?? groundItem;
+
+        this.runOrQueueAutoInteraction(
+          currentGroundItem,
+          {
+            type: "take-ground-item",
+            groundItemId: groundItem.id
+          },
+          "There is no path to that item."
+        );
         return;
       }
 
@@ -699,7 +1371,10 @@ export class MainScene extends Phaser.Scene {
         window.dispatchEvent(
           new CustomEvent("aldrym:ground-item-drag-start", {
             detail: {
-              groundItemId: groundItem.id
+              clientX: pointer.event instanceof MouseEvent ? pointer.event.clientX : 0,
+              clientY: pointer.event instanceof MouseEvent ? pointer.event.clientY : 0,
+              groundItemId: groundItem.id,
+              itemKey: groundItem.itemKey
             }
           })
         );
@@ -718,6 +1393,19 @@ export class MainScene extends Phaser.Scene {
       quantity,
       tooltip
     };
+  }
+
+  private getItemTextureKey(itemKey: string): string {
+    return itemTextureKeys[itemKey as keyof typeof itemTextureKeys] ?? itemTextureKeys.gold_coin;
+  }
+
+  private updateGroundItemSpriteSize(sprite: Phaser.GameObjects.Image, itemKey: string): void {
+    if (itemKey === "brown_backpack") {
+      sprite.setDisplaySize(21, 21);
+      return;
+    }
+
+    sprite.setDisplaySize(18, 18);
   }
 
   private destroyGroundItemView(groundItemId: string, view: GroundItemView): void {
@@ -768,19 +1456,36 @@ export class MainScene extends Phaser.Scene {
     if (!existingView.alive && monster.alive) {
       this.tweens.killTweensOf(existingView.container);
       existingView.container.setPosition(x, y);
+      existingView.facing = "south";
       this.updateMonsterView(existingView, monster);
+      this.playDirectionalAnimation(existingView.sprite, monsterTextureKeys[monster.type], existingView.facing, "idle");
       return;
     }
 
+    const nextDirection = this.inferFacingDirection(existingView.container, { x, y }, existingView.facing);
+    const isMoving = existingView.container.x !== x || existingView.container.y !== y;
+    existingView.facing = nextDirection;
+
     if (existingView.container.x !== x || existingView.container.y !== y) {
       this.tweens.killTweensOf(existingView.container);
+      this.playDirectionalAnimation(
+        existingView.sprite,
+        monsterTextureKeys[monster.type],
+        existingView.facing,
+        this.takeNextWalkAnimationState(existingView)
+      );
       this.tweens.add({
         targets: existingView.container,
         x,
         y,
-        duration: getMovementTweenDurationMs(monster.level),
-        ease: "Quad.easeOut"
+        duration: getMovementTweenDurationMs(monster.level, this.inferTweenMoveDirection(existingView.container, { x, y })),
+        ease: "Linear",
+        onComplete: () => {
+          this.playDirectionalAnimation(existingView.sprite, monsterTextureKeys[monster.type], existingView.facing, "idle");
+        }
       });
+    } else if (monster.alive && !isMoving) {
+      this.playDirectionalAnimation(existingView.sprite, monsterTextureKeys[monster.type], existingView.facing, "idle");
     }
 
     this.updateMonsterView(existingView, monster);
@@ -791,7 +1496,8 @@ export class MainScene extends Phaser.Scene {
   }
 
   private createMonsterView(monster: WorldMonster, x: number, y: number): MonsterView {
-    const label = this.add.text(0, -24, this.getMonsterLabel(monster), {
+    const metrics = this.getMonsterVisualMetrics(monster.type);
+    const label = this.add.text(0, metrics.labelY, this.getMonsterLabel(monster), {
       color: "#f2e5c8",
       fontFamily: "Georgia",
       fontSize: "10px",
@@ -800,22 +1506,36 @@ export class MainScene extends Phaser.Scene {
     });
     const shadow = this.add.ellipse(0, 8, 18, 9, 0x000000, 0.24);
     const tileMarker = this.add.rectangle(0, 0, this.map.tileSize - 4, this.map.tileSize - 4, 0x000000, 0);
-    const body = this.add.ellipse(0, 0, 24, 18, this.getMonsterColor(monster.type), 1);
-    const detail = this.add.rectangle(0, -1, 14, 6, 0xf0d18c, 0.58);
-    const healthBack = this.add.rectangle(-MONSTER_HEALTH_BAR_WIDTH / 2, -15, MONSTER_HEALTH_BAR_WIDTH, 4, 0x23140d, 1);
-    const healthBar = this.add.rectangle(-MONSTER_HEALTH_BAR_WIDTH / 2, -15, MONSTER_HEALTH_BAR_WIDTH, 4, 0x9f3d2c, 1);
+    const sprite = this.add.sprite(0, metrics.spriteY, monsterTextureKeys[monster.type], 0);
+    const healthBack = this.add.rectangle(
+      -MONSTER_HEALTH_BAR_WIDTH / 2 - 1,
+      metrics.healthY,
+      MONSTER_HEALTH_BAR_WIDTH + 2,
+      MONSTER_HEALTH_BAR_HEIGHT + 2,
+      0x23140d,
+      1
+    );
+    const healthBar = this.add.rectangle(
+      -MONSTER_HEALTH_BAR_WIDTH / 2,
+      metrics.healthY,
+      MONSTER_HEALTH_BAR_WIDTH,
+      MONSTER_HEALTH_BAR_HEIGHT,
+      0x9f3d2c,
+      1
+    );
     const hitArea = this.add.zone(0, 0, this.map.tileSize, this.map.tileSize);
 
     label.setOrigin(0.5, 1);
     this.updateMonsterTileMarker(tileMarker, monster);
-    body.setStrokeStyle(2, 0x2e1a10, 1);
-    detail.setStrokeStyle(1, 0x3e2a19, 0.7);
+    sprite.setOrigin(0.5, 1);
+    this.updateMonsterSpriteSize(sprite, monster.type);
     healthBack.setOrigin(0, 0.5);
+    healthBack.setStrokeStyle(1, 0xf0d18c, 0.24);
     healthBar.setOrigin(0, 0.5);
     hitArea.setOrigin(0.5);
     hitArea.setInteractive();
 
-    const container = this.add.container(x, y, [hitArea, tileMarker, label, healthBack, healthBar, shadow, body, detail]);
+    const container = this.add.container(x, y, [hitArea, tileMarker, shadow, sprite, label, healthBack, healthBar]);
     container.setDepth(40);
     hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (pointer.button === 2) {
@@ -825,18 +1545,21 @@ export class MainScene extends Phaser.Scene {
 
     const view = {
       alive: monster.alive,
-      body,
       container,
-      detail,
+      facing: "south" as CardinalDirection,
       healthBack,
       healthBar,
       hitArea,
       label,
+      monsterType: monster.type,
       shadow,
-      tileMarker
+      sprite,
+      tileMarker,
+      walkPhase: 0
     };
 
     this.updateMonsterView(view, monster);
+    this.playDirectionalAnimation(sprite, monsterTextureKeys[monster.type], view.facing, "idle");
     return view;
   }
 
@@ -851,26 +1574,27 @@ export class MainScene extends Phaser.Scene {
 
   private updateMonsterAliveView(view: MonsterView, monster: WorldMonster): void {
     const healthRatio = monster.maxHealth > 0 ? Phaser.Math.Clamp(monster.health / monster.maxHealth, 0, 1) : 0;
+    const metrics = this.getMonsterVisualMetrics(monster.type);
 
     view.alive = true;
     view.container.setDepth(40);
     view.label.setVisible(true);
-    view.label.setPosition(0, -24);
+    view.label.setPosition(0, metrics.labelY);
     view.label.setText(this.getMonsterLabel(monster));
     view.healthBack.setVisible(true);
+    view.healthBack.setPosition(-MONSTER_HEALTH_BAR_WIDTH / 2 - 1, metrics.healthY);
     view.healthBar.setVisible(true);
-    view.body.setVisible(true);
-    view.body.setPosition(0, 0);
-    view.body.setDisplaySize(24, 18);
-    view.body.setFillStyle(this.getMonsterColor(monster.type), 1);
-    view.body.setStrokeStyle(2, 0x2e1a10, 1);
-    view.detail.setVisible(true);
-    view.detail.setPosition(0, -1);
-    view.detail.setDisplaySize(14, 6);
-    view.detail.setFillStyle(0xf0d18c, 0.58);
-    view.detail.setStrokeStyle(1, 0x3e2a19, 0.7);
+    view.healthBar.setPosition(-MONSTER_HEALTH_BAR_WIDTH / 2, metrics.healthY);
+    view.sprite.setVisible(true);
+    if (view.monsterType !== monster.type) {
+      view.monsterType = monster.type;
+      view.sprite.setTexture(monsterTextureKeys[monster.type]);
+      this.playDirectionalAnimation(view.sprite, monsterTextureKeys[monster.type], view.facing, "idle");
+    }
+    view.sprite.setPosition(0, metrics.spriteY);
+    this.updateMonsterSpriteSize(view.sprite, monster.type);
     view.shadow.setVisible(true);
-    view.shadow.setDisplaySize(18, 9);
+    view.shadow.setDisplaySize(metrics.shadowWidth, metrics.shadowHeight);
     view.tileMarker.setVisible(true);
     view.hitArea.setInteractive();
     this.updateMonsterHealthBar(view.healthBar, healthRatio);
@@ -883,8 +1607,7 @@ export class MainScene extends Phaser.Scene {
     view.label.setVisible(false);
     view.healthBack.setVisible(false);
     view.healthBar.setVisible(false);
-    view.body.setVisible(false);
-    view.detail.setVisible(false);
+    view.sprite.setVisible(false);
     view.shadow.setVisible(false);
     view.hitArea.disableInteractive();
     view.tileMarker.setVisible(true);
@@ -894,7 +1617,7 @@ export class MainScene extends Phaser.Scene {
   private updateMonsterHealthBar(healthBar: Phaser.GameObjects.Rectangle, healthRatio: number): void {
     const filledWidth = Math.ceil(MONSTER_HEALTH_BAR_WIDTH * healthRatio);
 
-    healthBar.setDisplaySize(Math.max(0, filledWidth), 4);
+    healthBar.setDisplaySize(Math.max(0, filledWidth), MONSTER_HEALTH_BAR_HEIGHT);
   }
 
   private syncMonsterTargetMarkers(): void {
@@ -1000,26 +1723,37 @@ export class MainScene extends Phaser.Scene {
   }
 
   private getMonsterLabel(monster: WorldMonster): string {
-    return `${monster.name} ${monster.health}/${monster.maxHealth}`;
+    return monster.name;
   }
 
-  private getMonsterColor(type: WorldMonster["type"]): number {
-    switch (type) {
-      case "rat":
-        return 0x7c7568;
-      case "wolf":
-        return 0x8f8a7e;
-      case "troll":
-        return 0x4f7552;
-      case "goblin":
-        return 0x6f8b3d;
-      case "rotworm":
-        return 0x8b4f38;
-      case "orc":
-        return 0x53633d;
-      default:
-        return 0x7c7568;
-    }
+  private updateMonsterSpriteSize(sprite: Phaser.GameObjects.Sprite, type: WorldMonster["type"]): void {
+    const metrics = this.getMonsterVisualMetrics(type);
+    sprite.setDisplaySize(metrics.spriteWidth, metrics.spriteHeight);
+  }
+
+  private getMonsterVisualMetrics(type: WorldMonster["type"]): {
+    healthY: number;
+    labelY: number;
+    shadowHeight: number;
+    shadowWidth: number;
+    spriteHeight: number;
+    spriteWidth: number;
+    spriteY: number;
+  } {
+    const spriteWidth = type === "troll" ? 42 : 32;
+    const spriteHeight = type === "troll" ? 42 : 32;
+    const spriteY = type === "troll" ? 16 : 13;
+    const spriteTop = spriteY - spriteHeight;
+
+    return {
+      healthY: spriteTop - 2,
+      labelY: spriteTop - 7,
+      shadowHeight: type === "troll" ? 10 : 8,
+      shadowWidth: type === "troll" ? 22 : 16,
+      spriteHeight,
+      spriteWidth,
+      spriteY
+    };
   }
 
   private getCorpseLabel(corpse: Corpse): string {
@@ -1028,23 +1762,6 @@ export class MainScene extends Phaser.Scene {
 
   private getGroundItemLabel(groundItem: GroundItem): string {
     return groundItem.quantity > 1 ? `${groundItem.name} x${groundItem.quantity}` : groundItem.name;
-  }
-
-  private getGroundItemColor(groundItem: GroundItem): number {
-    switch (groundItem.itemType) {
-      case "currency":
-        return 0xd8b84d;
-      case "weapon":
-        return 0xb7b0a2;
-      case "container":
-        return 0x8d5c32;
-      case "consumable":
-        return 0xb84d55;
-      case "creature_part":
-        return 0x8f6f50;
-      default:
-        return 0xd8b84d;
-    }
   }
 
 }

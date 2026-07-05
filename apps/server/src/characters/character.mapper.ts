@@ -1,4 +1,4 @@
-import type { CharacterGender, CharacterSummary } from "@aldrym/shared";
+import type { CharacterClass, CharacterGender, CharacterSummary } from "@aldrym/shared";
 import type { Character } from "@prisma/client";
 
 type CharacterForSummary = Pick<
@@ -6,6 +6,7 @@ type CharacterForSummary = Pick<
   | "id"
   | "name"
   | "gender"
+  | "characterClass"
   | "level"
   | "experience"
   | "health"
@@ -24,6 +25,7 @@ export function toCharacterSummary(character: CharacterForSummary): CharacterSum
     id: character.id,
     name: character.name,
     gender: character.gender as CharacterGender,
+    characterClass: character.characterClass as CharacterClass,
     level: character.level,
     experience: character.experience,
     health: character.health,

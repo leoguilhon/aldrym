@@ -1,12 +1,27 @@
-import type { Corpse, CorpseItem, GroundItem, ItemDefinition, MonsterType, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type {
+  CharacterClass,
+  Corpse,
+  CorpseItem,
+  GroundItem,
+  ItemDefinition,
+  MonsterType,
+  Position,
+  WorldMonster,
+  WorldPlayer
+} from "@aldrym/shared";
 import { Injectable } from "@nestjs/common";
 
 interface OnlineWorldPlayer {
   socketId: string;
   userId: string;
   characterId: string;
+  characterClass: CharacterClass;
   name: string;
   level: number;
+  health: number;
+  maxHealth: number;
+  mana: number;
+  maxMana: number;
   position: Position;
 }
 
@@ -48,30 +63,6 @@ export const itemDefinitions: Record<string, ItemDefinition> = {
     isContainer: false,
     containerSize: null
   },
-  rat_tail: {
-    itemKey: "rat_tail",
-    name: "Rat Tail",
-    stackable: true,
-    itemType: "creature_part",
-    isContainer: false,
-    containerSize: null
-  },
-  beetle_shell: {
-    itemKey: "beetle_shell",
-    name: "Beetle Shell",
-    stackable: true,
-    itemType: "creature_part",
-    isContainer: false,
-    containerSize: null
-  },
-  moss_fang: {
-    itemKey: "moss_fang",
-    name: "Moss Fang",
-    stackable: true,
-    itemType: "creature_part",
-    isContainer: false,
-    containerSize: null
-  },
   chipped_dagger: {
     itemKey: "chipped_dagger",
     name: "Chipped Dagger",
@@ -81,17 +72,9 @@ export const itemDefinitions: Record<string, ItemDefinition> = {
     isContainer: false,
     containerSize: null
   },
-  small_health_flask: {
-    itemKey: "small_health_flask",
-    name: "Small Health Flask",
-    stackable: true,
-    itemType: "consumable",
-    isContainer: false,
-    containerSize: null
-  },
-  basic_backpack: {
-    itemKey: "basic_backpack",
-    name: "Basic Backpack",
+  brown_backpack: {
+    itemKey: "brown_backpack",
+    name: "Brown Backpack",
     stackable: false,
     itemType: "container",
     compatibleEquipmentSlots: ["backpack"],
@@ -108,29 +91,11 @@ const lootChanceThresholds: Record<LootChance, number> = {
 
 const lootTables: Record<MonsterType, LootTableEntry[]> = {
   rat: [
-    { itemKey: "gold_coin", minimumQuantity: 1, maximumQuantity: 5, chance: "common" },
-    { itemKey: "rat_tail", minimumQuantity: 1, maximumQuantity: 1, chance: "uncommon" }
-  ],
-  wolf: [
-    { itemKey: "gold_coin", minimumQuantity: 2, maximumQuantity: 8, chance: "common" },
-    { itemKey: "chipped_dagger", minimumQuantity: 1, maximumQuantity: 1, chance: "rare" }
+    { itemKey: "gold_coin", minimumQuantity: 1, maximumQuantity: 5, chance: "common" }
   ],
   troll: [
     { itemKey: "gold_coin", minimumQuantity: 2, maximumQuantity: 8, chance: "common" },
-    { itemKey: "beetle_shell", minimumQuantity: 1, maximumQuantity: 1, chance: "uncommon" }
-  ],
-  goblin: [
-    { itemKey: "gold_coin", minimumQuantity: 3, maximumQuantity: 10, chance: "common" },
     { itemKey: "chipped_dagger", minimumQuantity: 1, maximumQuantity: 1, chance: "uncommon" }
-  ],
-  rotworm: [
-    { itemKey: "gold_coin", minimumQuantity: 3, maximumQuantity: 10, chance: "common" },
-    { itemKey: "moss_fang", minimumQuantity: 1, maximumQuantity: 1, chance: "uncommon" }
-  ],
-  orc: [
-    { itemKey: "gold_coin", minimumQuantity: 4, maximumQuantity: 12, chance: "common" },
-    { itemKey: "small_health_flask", minimumQuantity: 1, maximumQuantity: 1, chance: "rare" },
-    { itemKey: "chipped_dagger", minimumQuantity: 1, maximumQuantity: 1, chance: "rare" }
   ]
 };
 
@@ -150,16 +115,6 @@ const initialMonsterSpawns: MonsterSpawn[] = [
     respawnMs: 15000
   },
   {
-    id: "wolf-1",
-    type: "wolf",
-    name: "Wolf",
-    level: 2,
-    maxHealth: 34,
-    experienceReward: 28,
-    position: { x: 4, y: 10, z: 0 },
-    respawnMs: 18000
-  },
-  {
     id: "troll-1",
     type: "troll",
     name: "Troll",
@@ -168,36 +123,6 @@ const initialMonsterSpawns: MonsterSpawn[] = [
     experienceReward: 36,
     position: { x: 16, y: 11, z: 0 },
     respawnMs: 22000
-  },
-  {
-    id: "goblin-1",
-    type: "goblin",
-    name: "Goblin",
-    level: 3,
-    maxHealth: 48,
-    experienceReward: 44,
-    position: { x: 23, y: 15, z: 0 },
-    respawnMs: 24000
-  },
-  {
-    id: "rotworm-1",
-    type: "rotworm",
-    name: "Rotworm",
-    level: 4,
-    maxHealth: 68,
-    experienceReward: 72,
-    position: { x: 24, y: 16, z: 0 },
-    respawnMs: 30000
-  },
-  {
-    id: "orc-1",
-    type: "orc",
-    name: "Orc",
-    level: 5,
-    maxHealth: 82,
-    experienceReward: 95,
-    position: { x: 12, y: 9, z: 0 },
-    respawnMs: 34000
   }
 ];
 
@@ -257,14 +182,21 @@ export class WorldStateService {
     return player;
   }
 
-  updatePlayerLevel(socketId: string, level: number): OnlineWorldPlayer | null {
+  updatePlayerStats(
+    socketId: string,
+    stats: Pick<WorldPlayer, "level" | "health" | "maxHealth" | "mana" | "maxMana">
+  ): OnlineWorldPlayer | null {
     const player = this.playersBySocketId.get(socketId);
 
     if (!player) {
       return null;
     }
 
-    player.level = level;
+    player.level = stats.level;
+    player.health = stats.health;
+    player.maxHealth = stats.maxHealth;
+    player.mana = stats.mana;
+    player.maxMana = stats.maxMana;
     return player;
   }
 
@@ -293,6 +225,20 @@ export class WorldStateService {
     }
 
     return corpse ? this.cloneCorpse(corpse) : null;
+  }
+
+  moveCorpse(corpseId: string, position: Position): Corpse | null {
+    const corpse = this.corpsesById.get(corpseId);
+
+    if (!corpse) {
+      return null;
+    }
+
+    corpse.x = position.x;
+    corpse.y = position.y;
+    corpse.z = position.z;
+
+    return this.cloneCorpse(corpse);
   }
 
   createGroundItem(item: ItemDefinition & { quantity: number }, position: Position): GroundItem {
@@ -594,8 +540,13 @@ export class WorldStateService {
   toWorldPlayer(player: OnlineWorldPlayer): WorldPlayer {
     return {
       characterId: player.characterId,
+      characterClass: player.characterClass,
       name: player.name,
       level: player.level,
+      health: player.health,
+      maxHealth: player.maxHealth,
+      mana: player.mana,
+      maxMana: player.maxMana,
       x: player.position.x,
       y: player.position.y,
       z: player.position.z

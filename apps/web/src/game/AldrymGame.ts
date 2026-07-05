@@ -1,4 +1,4 @@
-import type { Corpse, GroundItem, MoveDirection, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type { Corpse, GroundItem, InventoryMoveTarget, MoveDirection, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
 import Phaser from "phaser";
 
 import { createGameConfig } from "./config/gameConfig";
@@ -12,9 +12,15 @@ export interface AldrymGameOptions {
   localCharacterId: string;
   monsters: WorldMonster[];
   onAttackMonster?: (monsterId: string) => void;
+  onMoveCorpse?: (corpseId: string, position: Position) => void;
   onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   onTakeGroundItem?: (groundItemId: string) => void;
+  onTakeGroundItemToTarget?: (
+    groundItemId: string,
+    target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>
+  ) => void;
   onOpenCorpse?: (corpseId: string) => void;
+  onShowNotice?: (message: string) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
   parent: HTMLElement;
   players: WorldPlayer[];
@@ -34,10 +40,13 @@ export class AldrymGame {
       map: createLocalMap(),
       monsters: options.monsters,
       onAttackMonster: options.onAttackMonster,
+      onMoveCorpse: options.onMoveCorpse,
       onMoveGroundItem: options.onMoveGroundItem,
       onMoveIntent: options.onMoveIntent,
       onOpenCorpse: options.onOpenCorpse,
-      onTakeGroundItem: options.onTakeGroundItem
+      onShowNotice: options.onShowNotice,
+      onTakeGroundItem: options.onTakeGroundItem,
+      onTakeGroundItemToTarget: options.onTakeGroundItemToTarget
     });
 
     this.game = new Phaser.Game(
