@@ -93,7 +93,7 @@ corepack pnpm dev:web
 The default frontend API configuration is:
 
 ```powershell
-VITE_API_BASE_URL="http://localhost:3000"
+VITE_API_BASE_URL="http://localhost:41973"
 ```
 
 ## Useful Commands

@@ -70,7 +70,7 @@ corepack pnpm dev:web
 ## Local Endpoints
 
 - Web: `http://localhost:5173`
-- Server health: `http://localhost:3000/health`
+- Server health: `http://localhost:41973/health`
 - Frontend API base URL: `apps/web/.env`
 
 ## Stop the Environment

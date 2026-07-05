@@ -16,7 +16,7 @@ interface ApiErrorResponse {
   statusCode?: number;
 }
 
-const fallbackApiBaseUrl = "http://localhost:3001";
+const fallbackApiBaseUrl = "http://localhost:41973";
 
 export function getApiBaseUrl(): string {
   const configuredUrl = import.meta.env.VITE_API_BASE_URL?.trim();
