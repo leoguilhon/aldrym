@@ -735,11 +735,11 @@ function getItemIconPath(itemKey: string): string {
     case "gold_coin":
       return "/assets/items/gold_coin.png";
     case "meat":
-      return "/assets/items/meat.svg";
+      return "/assets/items/meat.png";
     case "patched_tunic":
-      return "/assets/items/patched_tunic.svg";
+      return "/assets/items/patched_tunic.png";
     case "splintered_shield":
-      return "/assets/items/splintered_shield.svg";
+      return "/assets/items/splintered_shield.png";
     default:
       return "/assets/items/gold_coin.png";
   }

@@ -215,9 +215,9 @@ export class MainScene extends Phaser.Scene {
     this.load.image(itemTextureKeys.chipped_dagger, "/assets/items/chipped_dagger.png");
     this.load.image(itemTextureKeys.gold_coin, "/assets/items/gold_coin.png");
     this.load.image(itemTextureKeys.brown_backpack, "/assets/items/brown_backpack.png");
-    this.load.image(itemTextureKeys.meat, "/assets/items/meat.svg");
-    this.load.image(itemTextureKeys.patched_tunic, "/assets/items/patched_tunic.svg");
-    this.load.image(itemTextureKeys.splintered_shield, "/assets/items/splintered_shield.svg");
+    this.load.image(itemTextureKeys.meat, "/assets/items/meat.png");
+    this.load.image(itemTextureKeys.patched_tunic, "/assets/items/patched_tunic.png");
+    this.load.image(itemTextureKeys.splintered_shield, "/assets/items/splintered_shield.png");
   }
 
   create(): void {
