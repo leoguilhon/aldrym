@@ -13,5 +13,5 @@
 ## Current Focus
 
 - The loot and inventory step is now in place: defeated monsters create in-memory corpses with server-rolled loot, players can open and take loot from corpses through server validation, and character inventory persists in PostgreSQL
-- The first equipment and container foundation is now in place: characters have persisted equipment slots, a basic backpack can be equipped, and item instances can move between the equipped backpack, nested backpacks, equipment, and in-memory ground items through server validation
-- Item stats, item use effects, item trading, shops, skills, spells, monster damage, player death, PvP, NPCs, quests, and broader world scalability remain deferred to later phases
+- The first authoritative combat progression slice is now in place: Tibia-inspired experience, health, mana, weapon skills, shielding, food-based regeneration, and equipment-driven attack, defense, and armor are all wired through the server
+- Spells, magic damage, player death, PvP, NPCs, quests, and broader world scalability remain deferred to later phases

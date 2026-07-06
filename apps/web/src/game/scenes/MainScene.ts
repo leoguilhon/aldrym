@@ -120,7 +120,10 @@ type OutfitTextureKey = (typeof outfitTextureKeys)[keyof typeof outfitTextureKey
 const itemTextureKeys = {
   brown_backpack: "item-brown-backpack",
   chipped_dagger: "item-chipped-dagger",
-  gold_coin: "item-gold-coin"
+  gold_coin: "item-gold-coin",
+  meat: "item-meat",
+  patched_tunic: "item-patched-tunic",
+  splintered_shield: "item-splintered-shield"
 } as const;
 const cardinalDirections: CardinalDirection[] = ["south", "north", "east", "west"];
 const pathMoveDirections: MoveDirection[] = ["up-left", "up-right", "down-left", "down-right", "up", "down", "left", "right"];
@@ -212,6 +215,9 @@ export class MainScene extends Phaser.Scene {
     this.load.image(itemTextureKeys.chipped_dagger, "/assets/items/chipped_dagger.png");
     this.load.image(itemTextureKeys.gold_coin, "/assets/items/gold_coin.png");
     this.load.image(itemTextureKeys.brown_backpack, "/assets/items/brown_backpack.png");
+    this.load.image(itemTextureKeys.meat, "/assets/items/meat.svg");
+    this.load.image(itemTextureKeys.patched_tunic, "/assets/items/patched_tunic.svg");
+    this.load.image(itemTextureKeys.splintered_shield, "/assets/items/splintered_shield.svg");
   }
 
   create(): void {
@@ -307,6 +313,26 @@ export class MainScene extends Phaser.Scene {
     if (this.isSceneReady) {
       this.syncGroundItems(this.pendingGroundItems);
     }
+  }
+
+  showMonsterDamage(monsterId: string, damage: number): void {
+    const view = this.monsterViews.get(monsterId);
+
+    if (!view || damage <= 0) {
+      return;
+    }
+
+    this.spawnFloatingDamageText(view.container.x, view.container.y - 28, damage);
+  }
+
+  showPlayerDamage(characterId: string, damage: number): void {
+    const view = this.playerViews.get(characterId);
+
+    if (!view || damage <= 0) {
+      return;
+    }
+
+    this.spawnFloatingDamageText(view.container.x, view.container.y - 30, damage);
   }
 
   getTilePositionFromClientPoint(clientX: number, clientY: number): Position | null {
@@ -1405,6 +1431,11 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
+    if (itemKey === "splintered_shield" || itemKey === "patched_tunic") {
+      sprite.setDisplaySize(20, 20);
+      return;
+    }
+
     sprite.setDisplaySize(18, 18);
   }
 
@@ -1637,6 +1668,30 @@ export class MainScene extends Phaser.Scene {
     }
 
     tileMarker.setStrokeStyle(2, 0xf0d18c, 0.9);
+  }
+
+  private spawnFloatingDamageText(x: number, y: number, damage: number): void {
+    const damageText = this.add.text(x, y, String(damage), {
+      color: "#e64d47",
+      fontFamily: "Georgia",
+      fontSize: "14px",
+      stroke: "#120c08",
+      strokeThickness: 3
+    });
+
+    damageText.setDepth(120);
+    damageText.setOrigin(0.5, 1);
+
+    this.tweens.add({
+      targets: damageText,
+      alpha: 0,
+      duration: 720,
+      ease: "Sine.easeOut",
+      y: y - 18,
+      onComplete: () => {
+        damageText.destroy();
+      }
+    });
   }
 
   private syncRespawnWarning(monster: WorldMonster): void {

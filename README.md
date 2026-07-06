@@ -114,4 +114,4 @@ docker compose down
 
 ## Current Scope
 
-This foundation intentionally does not include gameplay systems yet. The current client supports authentication, character selection, character creation, and a placeholder world-entry page, but there is still no Phaser game canvas, map rendering, movement, combat, inventory, or quest logic.
+The current project already includes a playable local-map vertical slice with a Phaser game canvas, server-authoritative movement, a single-troll PvE loop, corpse loot, backpack and equipment management, Tibia-inspired skill and combat calculations, and food-based regeneration. Spells, player death, PvP, NPCs, quests, and broader world content are still pending.

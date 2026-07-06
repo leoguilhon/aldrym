@@ -26,6 +26,473 @@ export const characterClasses = ["knight", "druid", "sorcerer", "hunter"] as con
 
 export type CharacterClass = (typeof characterClasses)[number];
 
+export const weaponCombatSkills = ["fist", "sword", "axe", "club", "distance"] as const;
+
+export type WeaponCombatSkill = (typeof weaponCombatSkills)[number];
+
+export const characterSkillKeys = [
+  "fist",
+  "club",
+  "sword",
+  "axe",
+  "distance",
+  "shielding",
+  "magicLevel",
+  "fishing"
+] as const;
+
+export type CharacterSkillKey = (typeof characterSkillKeys)[number];
+
+export type CombatSkillKey = Exclude<CharacterSkillKey, "magicLevel" | "fishing">;
+
+export const combatStances = ["offensive", "balanced", "defensive"] as const;
+
+export type CombatStance = (typeof combatStances)[number];
+
+export interface CharacterSkillState {
+  currentPoints: number;
+  level: number;
+  pointsForNextLevel: number;
+  progressPercent: number;
+}
+
+export interface CharacterSkills {
+  axe: CharacterSkillState;
+  club: CharacterSkillState;
+  distance: CharacterSkillState;
+  fishing: CharacterSkillState;
+  fist: CharacterSkillState;
+  magicLevel: CharacterSkillState;
+  shielding: CharacterSkillState;
+  sword: CharacterSkillState;
+}
+
+export interface CharacterFoodState {
+  foodExpiresAt: string | null;
+  maximumSeconds: number;
+  remainingSeconds: number;
+}
+
+export interface CharacterCombatStats {
+  armorValue: number;
+  attackSkill: WeaponCombatSkill;
+  attackValue: number;
+  defenseSkill: WeaponCombatSkill | "shielding";
+  defenseValue: number;
+  shieldDefense: number;
+  stance: CombatStance;
+  weaponAttack: number;
+  weaponDefense: number;
+}
+
+export interface ItemCombatStats {
+  armor: number | null;
+  attack: number | null;
+  defense: number | null;
+  foodSeconds: number | null;
+  shieldDefenseModifier: number | null;
+  weaponSkill: WeaponCombatSkill | null;
+}
+
+const rookieHealthAtLevelOne = 150;
+const rookieManaAtLevelOne = 55;
+const rookieLevelThreshold = 8;
+const rookieHealthPerLevel = 5;
+const rookieManaPerLevel = 5;
+const maximumFoodSeconds = 1200;
+const fistWeaponAttack = 7;
+
+type TibiaClassArchetype = "knight" | "paladin" | "mage";
+
+function getClassArchetype(characterClass: CharacterClass): TibiaClassArchetype {
+  switch (characterClass) {
+    case "hunter":
+      return "paladin";
+    case "druid":
+    case "sorcerer":
+      return "mage";
+    default:
+      return "knight";
+  }
+}
+
+function getSkillAdvanceConstant(skillKey: CharacterSkillKey): number {
+  switch (skillKey) {
+    case "distance":
+      return 30;
+    case "magicLevel":
+      return 1600;
+    case "fishing":
+      return 20;
+    case "shielding":
+      return 100;
+    default:
+      return 50;
+  }
+}
+
+function getSkillAdvanceMultiplier(characterClass: CharacterClass, skillKey: CharacterSkillKey): number {
+  const archetype = getClassArchetype(characterClass);
+
+  if (skillKey === "magicLevel") {
+    switch (archetype) {
+      case "knight":
+        return 3;
+      case "paladin":
+        return 1.4;
+      default:
+        return 1.1;
+    }
+  }
+
+  if (skillKey === "fishing") {
+    return 1.1;
+  }
+
+  switch (skillKey) {
+    case "fist":
+      switch (archetype) {
+        case "knight":
+          return 1.1;
+        case "paladin":
+          return 1.2;
+        default:
+          return 1.5;
+      }
+    case "club":
+    case "sword":
+    case "axe":
+      switch (archetype) {
+        case "knight":
+          return 1.1;
+        case "paladin":
+          return 1.2;
+        default:
+          return 2;
+      }
+    case "distance":
+      switch (archetype) {
+        case "paladin":
+          return 1.1;
+        case "knight":
+          return 1.4;
+        default:
+          return 1.8;
+      }
+    case "shielding":
+      switch (archetype) {
+        case "knight":
+          return 1.1;
+        case "paladin":
+          return 1.3;
+        default:
+          return 1.5;
+      }
+    default:
+      return 1.1;
+  }
+}
+
+function getSkillAdvanceOffset(skillKey: CharacterSkillKey): number {
+  return skillKey === "magicLevel" ? 0 : 10;
+}
+
+function getPostRookieHealthGain(characterClass: CharacterClass): number {
+  switch (getClassArchetype(characterClass)) {
+    case "paladin":
+      return 10;
+    case "mage":
+      return 5;
+    default:
+      return 15;
+  }
+}
+
+function getPostRookieManaGain(characterClass: CharacterClass): number {
+  switch (getClassArchetype(characterClass)) {
+    case "paladin":
+      return 15;
+    case "mage":
+      return 30;
+    default:
+      return 5;
+  }
+}
+
+function getRegenerationPerHour(characterClass: CharacterClass): { health: number; mana: number } {
+  switch (getClassArchetype(characterClass)) {
+    case "paladin":
+      return { health: 450, mana: 1800 };
+    case "mage":
+      return { health: 300, mana: 2400 };
+    default:
+      return { health: 600, mana: 1200 };
+  }
+}
+
+export function getMaximumFoodSeconds(): number {
+  return maximumFoodSeconds;
+}
+
+export function getFistWeaponAttack(): number {
+  return fistWeaponAttack;
+}
+
+export function getExperienceRequiredForLevel(level: number): number {
+  const normalizedLevel = Math.max(1, Math.floor(level));
+
+  if (normalizedLevel <= 1) {
+    return 0;
+  }
+
+  const previousLevel = normalizedLevel - 1;
+  return Math.floor(((50 * previousLevel * previousLevel * previousLevel) - (150 * previousLevel * previousLevel) + (400 * previousLevel)) / 3);
+}
+
+export function getExperienceRequiredForNextLevel(level: number): number {
+  return getExperienceRequiredForLevel(level + 1);
+}
+
+export function getLevelFromExperience(experience: number): number {
+  const normalizedExperience = Math.max(0, Math.floor(experience));
+  let level = 1;
+
+  while (normalizedExperience >= getExperienceRequiredForNextLevel(level)) {
+    level += 1;
+  }
+
+  return level;
+}
+
+export function getBaseMaximumHealthForLevel(characterClass: CharacterClass, level: number): number {
+  const normalizedLevel = Math.max(1, Math.floor(level));
+
+  if (normalizedLevel <= rookieLevelThreshold) {
+    return rookieHealthAtLevelOne + (normalizedLevel - 1) * rookieHealthPerLevel;
+  }
+
+  const rookieHealth = rookieHealthAtLevelOne + (rookieLevelThreshold - 1) * rookieHealthPerLevel;
+  return rookieHealth + (normalizedLevel - rookieLevelThreshold) * getPostRookieHealthGain(characterClass);
+}
+
+export function getBaseMaximumManaForLevel(characterClass: CharacterClass, level: number): number {
+  const normalizedLevel = Math.max(1, Math.floor(level));
+
+  if (normalizedLevel <= rookieLevelThreshold) {
+    return rookieManaAtLevelOne + (normalizedLevel - 1) * rookieManaPerLevel;
+  }
+
+  const rookieMana = rookieManaAtLevelOne + (rookieLevelThreshold - 1) * rookieManaPerLevel;
+  return rookieMana + (normalizedLevel - rookieLevelThreshold) * getPostRookieManaGain(characterClass);
+}
+
+export function getBaseAttackValueFromLevel(level: number): number {
+  const normalizedLevel = Math.max(1, Math.floor(level));
+  const levelFactor = Math.floor((normalizedLevel + 1000) / 5) + 250;
+  const skillFactor = Math.floor((Math.sqrt(levelFactor * 13) + 5) / 10);
+  return Math.max(0, levelFactor - 450 + skillFactor);
+}
+
+export function getAttackFactorForStance(stance: CombatStance): number {
+  switch (stance) {
+    case "offensive":
+      return 1.2;
+    case "defensive":
+      return 0.8;
+    default:
+      return 1;
+  }
+}
+
+export function getDefenseFactorForStance(stance: CombatStance): number {
+  switch (stance) {
+    case "offensive":
+      return 0.5;
+    case "defensive":
+      return 1;
+    default:
+      return 0.7;
+  }
+}
+
+export function getSkillPointsForNextLevel(
+  characterClass: CharacterClass,
+  skillKey: CharacterSkillKey,
+  currentLevel: number
+): number {
+  const level = Math.max(getSkillAdvanceOffset(skillKey), Math.floor(currentLevel));
+  const advanceConstant = getSkillAdvanceConstant(skillKey);
+  const advanceMultiplier = getSkillAdvanceMultiplier(characterClass, skillKey);
+  const advanceOffset = getSkillAdvanceOffset(skillKey);
+  return Math.max(1, Math.round(advanceConstant * advanceMultiplier ** (level - advanceOffset)));
+}
+
+export function createCharacterSkillState(
+  characterClass: CharacterClass,
+  skillKey: CharacterSkillKey,
+  level: number,
+  currentPoints: number
+): CharacterSkillState {
+  const pointsForNextLevel = getSkillPointsForNextLevel(characterClass, skillKey, level);
+  const normalizedPoints = Math.max(0, Math.floor(currentPoints));
+  const progressPercent = pointsForNextLevel > 0 ? Math.min(100, (normalizedPoints / pointsForNextLevel) * 100) : 0;
+
+  return {
+    currentPoints: normalizedPoints,
+    level: Math.max(getSkillAdvanceOffset(skillKey), Math.floor(level)),
+    pointsForNextLevel,
+    progressPercent
+  };
+}
+
+export function addSkillProgress(
+  characterClass: CharacterClass,
+  skillKey: CharacterSkillKey,
+  level: number,
+  currentPoints: number,
+  gainedPoints: number
+): CharacterSkillState {
+  let nextLevel = Math.max(getSkillAdvanceOffset(skillKey), Math.floor(level));
+  let nextPoints = Math.max(0, Math.floor(currentPoints)) + Math.max(0, Math.floor(gainedPoints));
+  let pointsForNextLevel = getSkillPointsForNextLevel(characterClass, skillKey, nextLevel);
+
+  while (nextPoints >= pointsForNextLevel) {
+    nextPoints -= pointsForNextLevel;
+    nextLevel += 1;
+    pointsForNextLevel = getSkillPointsForNextLevel(characterClass, skillKey, nextLevel);
+  }
+
+  return createCharacterSkillState(characterClass, skillKey, nextLevel, nextPoints);
+}
+
+export function createCharacterSkills(
+  characterClass: CharacterClass,
+  levels: Record<CharacterSkillKey, number>,
+  progress: Record<CharacterSkillKey, number>
+): CharacterSkills {
+  return {
+    axe: createCharacterSkillState(characterClass, "axe", levels.axe, progress.axe),
+    club: createCharacterSkillState(characterClass, "club", levels.club, progress.club),
+    distance: createCharacterSkillState(characterClass, "distance", levels.distance, progress.distance),
+    fishing: createCharacterSkillState(characterClass, "fishing", levels.fishing, progress.fishing),
+    fist: createCharacterSkillState(characterClass, "fist", levels.fist, progress.fist),
+    magicLevel: createCharacterSkillState(characterClass, "magicLevel", levels.magicLevel, progress.magicLevel),
+    shielding: createCharacterSkillState(characterClass, "shielding", levels.shielding, progress.shielding),
+    sword: createCharacterSkillState(characterClass, "sword", levels.sword, progress.sword)
+  };
+}
+
+export function getRemainingFoodSeconds(foodExpiresAt: string | null | undefined, now = Date.now()): number {
+  if (!foodExpiresAt) {
+    return 0;
+  }
+
+  const expiresAtMs = Date.parse(foodExpiresAt);
+
+  if (!Number.isFinite(expiresAtMs)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.ceil((expiresAtMs - now) / 1000));
+}
+
+export function createCharacterFoodState(foodExpiresAt: string | null | undefined, now = Date.now()): CharacterFoodState {
+  return {
+    foodExpiresAt: foodExpiresAt ?? null,
+    maximumSeconds: maximumFoodSeconds,
+    remainingSeconds: getRemainingFoodSeconds(foodExpiresAt, now)
+  };
+}
+
+export function getWeaponCombatSkill(item: Pick<ItemCombatStats, "weaponSkill"> | null | undefined): WeaponCombatSkill {
+  return item?.weaponSkill ?? "fist";
+}
+
+export function getWeaponAttack(item: Pick<ItemCombatStats, "attack"> | null | undefined): number {
+  return Math.max(0, item?.attack ?? fistWeaponAttack);
+}
+
+export function getWeaponDefense(item: Pick<ItemCombatStats, "defense"> | null | undefined): number {
+  return Math.max(0, item?.defense ?? 0);
+}
+
+export function getShieldDefense(item: Pick<ItemCombatStats, "defense"> | null | undefined): number {
+  return Math.max(0, item?.defense ?? 0);
+}
+
+export function getTotalArmorValue(items: Array<Pick<ItemCombatStats, "armor"> | null | undefined>): number {
+  return items.reduce((total, item) => total + Math.max(0, item?.armor ?? 0), 0);
+}
+
+export function calculateAttackValue(options: {
+  attack: number;
+  level: number;
+  skillLevel: number;
+  stance: CombatStance;
+}): number {
+  const baseDamage = getBaseAttackValueFromLevel(options.level);
+  const stanceAdjustedAttack = Math.floor(options.attack * getAttackFactorForStance(options.stance));
+  const skillTerm = (options.skillLevel + 4) / 28;
+  return Math.max(0, Math.floor(baseDamage + stanceAdjustedAttack * skillTerm));
+}
+
+export function calculateDefenseValue(options: {
+  defense: number;
+  skillLevel: number;
+  stance: CombatStance;
+}): number {
+  const skillTerm = (options.skillLevel + 8) / 40;
+  return Math.max(0, Math.floor(options.defense * skillTerm * getDefenseFactorForStance(options.stance)));
+}
+
+export function calculateCharacterCombatStats(options: {
+  equippedItems: Array<Pick<ItemCombatStats, "armor"> | null | undefined>;
+  level: number;
+  shield?: Pick<ItemCombatStats, "defense"> | null;
+  skills: CharacterSkills;
+  stance: CombatStance;
+  weapon?: Pick<ItemCombatStats, "attack" | "defense" | "shieldDefenseModifier" | "weaponSkill"> | null;
+}): CharacterCombatStats {
+  const attackSkill = getWeaponCombatSkill(options.weapon);
+  const weaponAttack = getWeaponAttack(options.weapon);
+  const weaponDefense = getWeaponDefense(options.weapon);
+  const shieldDefense = getShieldDefense(options.shield);
+  const defenseSkill = shieldDefense > 0 ? "shielding" : attackSkill;
+  const baseDefense =
+    shieldDefense > 0
+      ? shieldDefense + Math.max(0, options.weapon?.shieldDefenseModifier ?? 0)
+      : weaponDefense;
+
+  return {
+    armorValue: getTotalArmorValue(options.equippedItems),
+    attackSkill,
+    attackValue: calculateAttackValue({
+      attack: weaponAttack,
+      level: options.level,
+      skillLevel: options.skills[attackSkill].level,
+      stance: options.stance
+    }),
+    defenseSkill,
+    defenseValue: calculateDefenseValue({
+      defense: baseDefense,
+      skillLevel: options.skills[defenseSkill].level,
+      stance: options.stance
+    }),
+    shieldDefense,
+    stance: options.stance,
+    weaponAttack,
+    weaponDefense
+  };
+}
+
+export function getRegenerationPerSecond(characterClass: CharacterClass): { health: number; mana: number } {
+  const regeneration = getRegenerationPerHour(characterClass);
+  return {
+    health: regeneration.health / 3600,
+    mana: regeneration.mana / 3600
+  };
+}
+
 export interface Position {
   x: number;
   y: number;
@@ -43,7 +510,9 @@ export interface DeleteCharacterRequest {
 }
 
 export interface CharacterSummary extends Position {
+  combatStats: CharacterCombatStats;
   id: string;
+  food: CharacterFoodState;
   name: string;
   gender: CharacterGender;
   characterClass: CharacterClass;
@@ -53,6 +522,7 @@ export interface CharacterSummary extends Position {
   maxHealth: number;
   mana: number;
   maxMana: number;
+  skills: CharacterSkills;
   createdAt: string;
   updatedAt: string;
 }
@@ -113,22 +583,25 @@ export interface WorldPlayer extends Position {
 export type MonsterType = "rat" | "troll";
 
 export interface WorldMonster extends Position {
+  armor: number;
   id: string;
   type: MonsterType;
   name: string;
   level: number;
   health: number;
   maxHealth: number;
+  maxDamage: number;
   experienceReward: number;
   alive: boolean;
   respawnMs: number;
   respawnDueAt: number | null;
+  retreatAtHealth: number | null;
   spawnX: number;
   spawnY: number;
   spawnZ: number;
 }
 
-export type ItemType = "currency" | "creature_part" | "weapon" | "consumable" | "container";
+export type ItemType = "armor" | "container" | "consumable" | "creature_part" | "currency" | "shield" | "weapon";
 
 export const equipmentSlots = [
   "necklace",
@@ -148,14 +621,111 @@ export type EquipmentSlot = (typeof equipmentSlots)[number];
 export type InventoryLocationType = "root" | "container" | "equipment";
 
 export interface ItemDefinition {
+  armor: number | null;
+  attack: number | null;
   itemKey: string;
   name: string;
   stackable: boolean;
+  defense: number | null;
+  foodSeconds: number | null;
   itemType: ItemType;
   compatibleEquipmentSlots?: EquipmentSlot[];
   isContainer: boolean;
   containerSize: number | null;
+  shieldDefenseModifier: number | null;
+  weaponSkill: WeaponCombatSkill | null;
 }
+
+export const itemDefinitions: Record<string, ItemDefinition> = {
+  gold_coin: {
+    armor: null,
+    attack: null,
+    containerSize: null,
+    defense: null,
+    foodSeconds: null,
+    isContainer: false,
+    itemKey: "gold_coin",
+    itemType: "currency",
+    name: "Gold Coin",
+    shieldDefenseModifier: null,
+    stackable: true,
+    weaponSkill: null
+  },
+  chipped_dagger: {
+    armor: null,
+    attack: 10,
+    compatibleEquipmentSlots: ["weapon"],
+    containerSize: null,
+    defense: 6,
+    foodSeconds: null,
+    isContainer: false,
+    itemKey: "chipped_dagger",
+    itemType: "weapon",
+    name: "Chipped Dagger",
+    shieldDefenseModifier: 0,
+    stackable: false,
+    weaponSkill: "sword"
+  },
+  brown_backpack: {
+    armor: null,
+    attack: null,
+    compatibleEquipmentSlots: ["backpack"],
+    containerSize: 20,
+    defense: null,
+    foodSeconds: null,
+    isContainer: true,
+    itemKey: "brown_backpack",
+    itemType: "container",
+    name: "Brown Backpack",
+    shieldDefenseModifier: null,
+    stackable: false,
+    weaponSkill: null
+  },
+  splintered_shield: {
+    armor: null,
+    attack: null,
+    compatibleEquipmentSlots: ["shield"],
+    containerSize: null,
+    defense: 11,
+    foodSeconds: null,
+    isContainer: false,
+    itemKey: "splintered_shield",
+    itemType: "shield",
+    name: "Splintered Shield",
+    shieldDefenseModifier: null,
+    stackable: false,
+    weaponSkill: null
+  },
+  patched_tunic: {
+    armor: 3,
+    attack: null,
+    compatibleEquipmentSlots: ["body"],
+    containerSize: null,
+    defense: null,
+    foodSeconds: null,
+    isContainer: false,
+    itemKey: "patched_tunic",
+    itemType: "armor",
+    name: "Patched Tunic",
+    shieldDefenseModifier: null,
+    stackable: false,
+    weaponSkill: null
+  },
+  meat: {
+    armor: null,
+    attack: null,
+    containerSize: null,
+    defense: null,
+    foodSeconds: 180,
+    isContainer: false,
+    itemKey: "meat",
+    itemType: "consumable",
+    name: "Meat",
+    shieldDefenseModifier: null,
+    stackable: true,
+    weaponSkill: null
+  }
+};
 
 export interface InventoryItem extends ItemDefinition {
   id: string;
@@ -289,6 +859,10 @@ export interface InventoryEquipItemRequest {
   equipmentSlot?: EquipmentSlot;
 }
 
+export interface InventoryUseItemRequest {
+  itemId: string;
+}
+
 export interface InventoryUnequipItemRequest {
   equipmentSlot: EquipmentSlot;
   target?: Extract<InventoryMoveTarget, { locationType: "root" | "container" }>;
@@ -319,6 +893,10 @@ export interface GroundItemMoveRequest {
 
 export interface StopCombatRequest {
   monsterId?: string;
+}
+
+export interface SetCombatStanceRequest {
+  stance: CombatStance;
 }
 
 export interface PlayerMovedEvent {
@@ -461,6 +1039,17 @@ export interface CharacterStatsUpdatedEvent {
   maxMana: number;
 }
 
+export interface CharacterUpdatedEvent {
+  character: CharacterSummary;
+}
+
+export interface CharacterDamagedEvent {
+  characterId: string;
+  damage: number;
+  health: number;
+  maxHealth: number;
+}
+
 export interface CombatStartedEvent {
   monsterId: string;
 }
@@ -485,6 +1074,7 @@ export interface WorldClientToServerEvents {
   "player:move": (payload: PlayerMoveRequest) => void;
   "combat:attack": (payload: AttackMonsterRequest) => void;
   "combat:stop": (payload?: StopCombatRequest) => void;
+  "combat:set-stance": (payload: SetCombatStanceRequest) => void;
   "corpse:open": (payload: CorpseOpenRequest) => void;
   "corpse:move": (payload: CorpseMoveRequest) => void;
   "corpse:take-item": (payload: CorpseTakeItemRequest) => void;
@@ -492,6 +1082,7 @@ export interface WorldClientToServerEvents {
   "corpse:drop-item": (payload: CorpseDropItemRequest) => void;
   "inventory:move-item": (payload: InventoryMoveItemRequest) => void;
   "inventory:equip-item": (payload: InventoryEquipItemRequest) => void;
+  "inventory:use-item": (payload: InventoryUseItemRequest) => void;
   "inventory:unequip-item": (payload: InventoryUnequipItemRequest) => void;
   "inventory:drop-item": (payload: InventoryDropItemRequest) => void;
   "ground-item:take": (payload: GroundItemTakeRequest) => void;
@@ -533,6 +1124,8 @@ export interface WorldServerToClientEvents {
   "character:experience-updated": (payload: CharacterExperienceUpdatedEvent) => void;
   "character:level-up": (payload: CharacterLevelUpEvent) => void;
   "character:stats-updated": (payload: CharacterStatsUpdatedEvent) => void;
+  "character:updated": (payload: CharacterUpdatedEvent) => void;
+  "character:damaged": (payload: CharacterDamagedEvent) => void;
   "combat:started": (payload: CombatStartedEvent) => void;
   "combat:stopped": (payload: CombatStoppedEvent) => void;
   "combat:error": (payload: CombatErrorEvent) => void;
@@ -553,6 +1146,7 @@ export const worldEventNames = {
   playerLeft: "player:left",
   combatAttack: "combat:attack",
   combatStop: "combat:stop",
+  combatSetStance: "combat:set-stance",
   monsterSpawned: "monster:spawned",
   monsterDamaged: "monster:damaged",
   monsterDied: "monster:died",
@@ -573,6 +1167,7 @@ export const worldEventNames = {
   inventoryError: "inventory:error",
   inventoryMoveItem: "inventory:move-item",
   inventoryEquipItem: "inventory:equip-item",
+  inventoryUseItem: "inventory:use-item",
   inventoryUnequipItem: "inventory:unequip-item",
   inventoryDropItem: "inventory:drop-item",
   groundItemTake: "ground-item:take",
@@ -590,6 +1185,8 @@ export const worldEventNames = {
   characterExperienceUpdated: "character:experience-updated",
   characterLevelUp: "character:level-up",
   characterStatsUpdated: "character:stats-updated",
+  characterUpdated: "character:updated",
+  characterDamaged: "character:damaged",
   combatStarted: "combat:started",
   combatStopped: "combat:stopped",
   combatError: "combat:error"

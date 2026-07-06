@@ -1398,6 +1398,77 @@ p {
   background: linear-gradient(90deg, #2d4b73 0%, #4870a4 100%);
 }
 
+.combat-stance-group {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.35rem;
+  margin-top: 0.8rem;
+}
+
+.combat-stance-button {
+  border: 1px solid rgba(107, 74, 42, 0.32);
+  border-radius: 0.55rem;
+  padding: 0.4rem 0.45rem;
+  background: rgba(255, 248, 236, 0.42);
+  color: #5b381d;
+  font-size: 0.73rem;
+  font-weight: 700;
+}
+
+.combat-stance-button--active {
+  border-color: rgba(128, 43, 28, 0.72);
+  background: linear-gradient(180deg, #b14e36 0%, #7b2b1f 100%);
+  color: #fff2df;
+}
+
+.skill-meter-list {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.skill-meter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "header percent"
+    "track percent";
+  gap: 0.3rem 0.55rem;
+  align-items: center;
+}
+
+.skill-meter__header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.55rem;
+  grid-area: header;
+  color: rgba(87, 62, 43, 0.92);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.skill-meter__track {
+  overflow: hidden;
+  grid-area: track;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: rgba(60, 38, 24, 0.12);
+}
+
+.skill-meter__track span {
+  display: block;
+  height: 100%;
+  min-width: 0.3rem;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #8b6236 0%, #d39e4b 100%);
+}
+
+.skill-meter small {
+  grid-area: percent;
+  color: rgba(87, 62, 43, 0.88);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
 @media (max-width: 900px) {
   .site-header,
   .page-hero {

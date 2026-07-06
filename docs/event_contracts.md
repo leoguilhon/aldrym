@@ -20,6 +20,10 @@ This document defines the multiplayer world events used by the browser client an
   - Payload: `StopCombatRequest`
   - Shape: `{ monsterId?: string }`
   - Purpose: Stop the current auto-attack session.
+- `combat:set-stance`
+  - Payload: `SetCombatStanceRequest`
+  - Shape: `{ stance: "offensive" | "balanced" | "defensive" }`
+  - Purpose: Change the player's active fight stance so the server recalculates attack and defense values.
 - `corpse:open`
   - Payload: `CorpseOpenRequest`
   - Shape: `{ corpseId: string }`
@@ -40,6 +44,10 @@ This document defines the multiplayer world events used by the browser client an
   - Payload: `InventoryDropItemRequest`
   - Shape: `{ itemId: string; position: Position }`
   - Purpose: Request dropping an owned item instance on a target ground tile. The server validates that the tile is walkable, within 5 SQM, and has line of sight from the character.
+- `inventory:use-item`
+  - Payload: `InventoryUseItemRequest`
+  - Shape: `{ itemId: string }`
+  - Purpose: Request using an owned item instance. The current use flow covers edible items such as meat and applies the authoritative food timer on the server.
 - `ground-item:take`
   - Payload: `GroundItemTakeRequest`
   - Shape: `{ groundItemId: string; target?: InventoryMoveTarget }`
@@ -174,7 +182,15 @@ This document defines the multiplayer world events used by the browser client an
 - `character:stats-updated`
   - Payload: `CharacterStatsUpdatedEvent`
   - Shape: `{ characterId: string; health: number; maxHealth: number; mana: number; maxMana: number }`
-  - Purpose: Send updated character combat stats after a monster hit.
+  - Purpose: Send updated health and mana values for simple UI mirrors.
+- `character:updated`
+  - Payload: `CharacterUpdatedEvent`
+  - Shape: `{ character: CharacterSummary }`
+  - Purpose: Send the authoritative full character summary, including skills, food state, and derived combat stats after join, skill gain, stance changes, eating, regeneration, experience gain, or damage.
+- `character:damaged`
+  - Payload: `CharacterDamagedEvent`
+  - Shape: `{ characterId: string; damage: number; health: number; maxHealth: number }`
+  - Purpose: Notify the local player that a monster attack landed and provide the exact damage value for combat feedback such as floating damage text.
 - `combat:started`
   - Payload: `CombatStartedEvent`
   - Shape: `{ monsterId: string }`
@@ -204,4 +220,4 @@ This document defines the multiplayer world events used by the browser client an
 - The visible carried inventory is the equipped backpack. Basic backpacks are equippable containers with 20 slots, and containers can hold other containers when nested movement is valid.
 - If no backpack is equipped, corpse loot is accepted only when it can be equipped directly into an empty compatible equipment slot.
 - Stackable items merge only in the same root or container location with the same `itemKey`; non-stackable items remain separate instances.
-- Monsters, corpses, and ground items are not persisted to PostgreSQL yet. Character experience, level, health, max health, mana, max mana, and inventory are persisted when they change.
+- Monsters, corpses, and ground items are not persisted to PostgreSQL yet. Character experience, level, health, max health, mana, max mana, skill progression, food timer, and inventory are persisted when they change.

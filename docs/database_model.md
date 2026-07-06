@@ -2,7 +2,7 @@
 
 ## Current Scope
 
-The current Prisma schema covers account authentication, basic character ownership, the monster catalog, and persistent character item instances for containers and equipment.
+The current Prisma schema covers account authentication, character ownership, persistent combat progression, a small monster catalog, and persistent character item instances for containers and equipment.
 
 ## User
 
@@ -67,7 +67,7 @@ The current Prisma schema covers account authentication, basic character ownersh
 - Unique character identity
 - Unique name
 - Ownership relation to a user
-- Basic progression and spawn state
+- Class selection, combat progression, and spawn state
 - One-to-many relation to inventory items
 - Timestamps
 
@@ -77,12 +77,30 @@ The current Prisma schema covers account authentication, basic character ownersh
 - `userId`
 - `name`
 - `gender`
+- `characterClass`
 - `level`
 - `experience`
 - `health`
 - `maxHealth`
 - `mana`
 - `maxMana`
+- `fistLevel`
+- `fistProgress`
+- `swordLevel`
+- `swordProgress`
+- `axeLevel`
+- `axeProgress`
+- `clubLevel`
+- `clubProgress`
+- `distanceLevel`
+- `distanceProgress`
+- `shieldingLevel`
+- `shieldingProgress`
+- `magicLevel`
+- `magicLevelProgress`
+- `fishingLevel`
+- `fishingProgress`
+- `foodExpiresAt`
 - `x`
 - `y`
 - `z`
@@ -93,9 +111,12 @@ The current Prisma schema covers account authentication, basic character ownersh
 
 - New characters start at level `1`
 - New characters start with `0` experience
-- New characters start with `100 / 100` health
-- New characters start with `50 / 50` mana
+- New characters start with `150 / 150` health
+- New characters start with `55 / 55` mana
+- New characters start with weapon skills, shielding, and fishing at level `10` with `0` stored progress
+- New characters start with magic level `0` and `0` stored progress
 - New characters start at position `x=100`, `y=100`, `z=0`
+- New characters receive a starter backpack, dagger, tunic, and shield through character creation or migration
 
 ## Constraints
 
@@ -114,5 +135,6 @@ The current Prisma schema covers account authentication, basic character ownersh
 
 - This is not the final game database design.
 - Authentication currently uses local email and password credentials.
-- Item definitions and loot tables are currently hardcoded in server code.
-- Corpse state, live monster state, quests, item stats, item use effects, and broader world persistence are intentionally deferred.
+- Item definitions are currently hardcoded in the shared package, while loot tables remain hardcoded in the server runtime.
+- Live monster state, corpse state, and ground items remain in memory only.
+- The current schema already persists combat-relevant progression such as experience, level, health, mana, weapon skills, shielding, magic level, fishing, and the active food timer.

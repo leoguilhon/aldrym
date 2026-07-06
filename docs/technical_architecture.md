@@ -21,9 +21,9 @@
 - Frontend authentication state stored in localStorage-backed React context
 - NestJS server with a `/health` endpoint and REST modules for authentication and character management
 - Socket.IO world gateway with JWT-authenticated connections
-- Prisma schema with `User`, `Character`, `CharacterItem`, and `Monster` for account ownership, character spawn state, item instances, equipment/container placement, and monster catalog data
-- Shared package for API, world map, and gameplay-adjacent type contracts
-- In-memory PvE monster state for the first local-map spawns based on the current monster catalog
+- Prisma schema with `User`, `Character`, `CharacterItem`, and `Monster` for account ownership, character spawn state, combat progression, item instances, equipment/container placement, and monster catalog data
+- Shared package for API, world map, item definitions, and Tibia-inspired gameplay formulas such as experience thresholds, class-relative skill advancement, attack, defense, armor, health, mana, and food regeneration
+- In-memory PvE world state for the current local-map combat slice, including the active troll spawn, corpses, and ground items
 
 ## World Join, Movement, and Combat
 
@@ -36,17 +36,21 @@
 - Alive monsters occupy tiles and block player movement on the authoritative server
 - Character position is saved to PostgreSQL only when a joined socket disconnects
 - On world join, the gateway sends current online players and the current monster list to the client
-- On world join, the gateway sends current in-memory corpses, current in-memory ground items, the selected character's persisted equipment slots, and the contents of the equipped backpack.
+- On world join, the gateway sends current in-memory corpses, current in-memory ground items, the selected character's persisted equipment slots, the contents of the equipped backpack, and a derived `character:updated` summary containing skills, food state, and combat stats.
 - Combat is session-based: the client sends only a targeted visible monster id or stop intent, and the server owns the auto-attack loop
 - The server validates screen-range targetability, monster life state, and authenticated world join state before starting combat. Active combat continues until stopped, the target dies, the target is lost, or the monster leaves the player's screen-range target area.
-- Player damage is still gated by adjacent melee range on every combat tick.
-- Player damage is temporarily resolved with an original 8 to 16 flat melee roll, while monster damage is intentionally disabled until defensive stats and death rules exist
-- Monsters follow the nearest player within 8 SQM with server-authoritative tile movement and remain still when no player is close enough
+- Player melee hits are still gated by adjacent range on every combat tick, while monsters retaliate through their own server-owned pursuit and attack loop.
+- Attack, defense, and armor resolution now follow a Tibia-inspired structure: attack value is derived from level, active weapon skill, weapon attack, and fight stance; defense value is derived from weapon or shield defense, the corresponding defense skill, and fight stance; armor reduces the remaining damage through a random reduction range based on total equipped armor.
+- Character skills are persisted per weapon family plus shielding, magic level, and fishing. Skill progression requirements are class-relative and use Tibia-inspired exponential point requirements.
+- Equipment stats are server-authored through shared item definitions. Weapon `attack`, weapon or shield `defense`, shield modifiers, and armor pieces all feed the authoritative combat calculation.
+- Monsters follow the nearest player within 8 SQM with server-authoritative tile movement and remain still when no player is close enough. The current troll spawn retreats when it reaches its low-health threshold.
 - Defeated monsters are kept in memory as corpses, show a client respawn warning shortly before returning, respawn after their configured delay at their original spawn tile, and are not persisted to PostgreSQL
-- Character experience and level-up stat changes are persisted to PostgreSQL when a monster defeat grants progression
-- Defeated monsters roll original server-side loot tables into in-memory corpse contents
+- Character experience, level-up stat changes, skill progression, and food timer changes are persisted to PostgreSQL when they change
+- Defeated monsters roll server-side loot tables into in-memory corpse contents. The current local-map slice removed the old rat spawn and uses a single troll with a longer 30-second respawn.
 - Corpse interaction is intent-based: the client sends only corpse ids, corpse item ids, and requested quantities, and the server validates same-tile or adjacent contact, including diagonals, before writing inventory
 - Ground item interaction is intent-based: dropped items are kept in memory for the current world process, the client sends only item ids, and the server validates ownership on drop plus direct contact on pickup.
 - Character inventory is persisted in PostgreSQL through `CharacterItem`; each row is an item instance located inside a container item or in an equipment slot. Root inventory may exist only as legacy migration state and is not a valid target for new inventory actions.
 - Stackable items merge only when they share the same item key and container location. Non-stackable items remain separate instances.
 - The current MVP treats the equipped backpack as the carried inventory, with persisted equipment slots and item-defined container capacities such as the 20-slot basic backpack.
+- Food consumption is authoritative. Edible items add to a persisted food timer up to a 1,200-second cap, and a server tick regenerates health and mana over time while a character is fed.
+- Player death and respawn are not implemented yet. Incoming damage currently clamps health at `1` as a temporary safeguard while the death loop is still pending.

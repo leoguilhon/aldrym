@@ -9,6 +9,7 @@ import type {
   WorldMonster,
   WorldPlayer
 } from "@aldrym/shared";
+import { itemDefinitions } from "@aldrym/shared";
 import { Injectable } from "@nestjs/common";
 
 interface OnlineWorldPlayer {
@@ -26,7 +27,9 @@ interface OnlineWorldPlayer {
 }
 
 interface MonsterSpawn {
+  armor: number;
   id: string;
+  maxDamage: number;
   type: MonsterType;
   name: string;
   level: number;
@@ -34,6 +37,7 @@ interface MonsterSpawn {
   experienceReward: number;
   position: Position;
   respawnMs: number;
+  retreatAtHealth: number | null;
 }
 
 interface WorldMonsterState extends MonsterSpawn {
@@ -45,57 +49,19 @@ interface WorldMonsterState extends MonsterSpawn {
   respawnDueAt: number | null;
 }
 
-type LootChance = "common" | "uncommon" | "rare";
-
 interface LootTableEntry {
+  dropChance: number;
   itemKey: string;
   minimumQuantity: number;
   maximumQuantity: number;
-  chance: LootChance;
 }
 
-export const itemDefinitions: Record<string, ItemDefinition> = {
-  gold_coin: {
-    itemKey: "gold_coin",
-    name: "Gold Coin",
-    stackable: true,
-    itemType: "currency",
-    isContainer: false,
-    containerSize: null
-  },
-  chipped_dagger: {
-    itemKey: "chipped_dagger",
-    name: "Chipped Dagger",
-    stackable: false,
-    itemType: "weapon",
-    compatibleEquipmentSlots: ["weapon"],
-    isContainer: false,
-    containerSize: null
-  },
-  brown_backpack: {
-    itemKey: "brown_backpack",
-    name: "Brown Backpack",
-    stackable: false,
-    itemType: "container",
-    compatibleEquipmentSlots: ["backpack"],
-    isContainer: true,
-    containerSize: 20
-  }
-};
-
-const lootChanceThresholds: Record<LootChance, number> = {
-  common: 0.78,
-  uncommon: 0.32,
-  rare: 0.1
-};
-
 const lootTables: Record<MonsterType, LootTableEntry[]> = {
-  rat: [
-    { itemKey: "gold_coin", minimumQuantity: 1, maximumQuantity: 5, chance: "common" }
-  ],
+  rat: [],
   troll: [
-    { itemKey: "gold_coin", minimumQuantity: 2, maximumQuantity: 8, chance: "common" },
-    { itemKey: "chipped_dagger", minimumQuantity: 1, maximumQuantity: 1, chance: "uncommon" }
+    { itemKey: "gold_coin", minimumQuantity: 1, maximumQuantity: 6, dropChance: 0.65 },
+    { itemKey: "meat", minimumQuantity: 1, maximumQuantity: 1, dropChance: 0.152 },
+    { itemKey: "chipped_dagger", minimumQuantity: 1, maximumQuantity: 1, dropChance: 0.18 }
   ]
 };
 
@@ -105,24 +71,17 @@ const CORPSE_SLOT_CAPACITY = 8;
 
 const initialMonsterSpawns: MonsterSpawn[] = [
   {
-    id: "rat-1",
-    type: "rat",
-    name: "Rat",
-    level: 1,
-    maxHealth: 24,
-    experienceReward: 18,
-    position: { x: 7, y: 10, z: 0 },
-    respawnMs: 15000
-  },
-  {
     id: "troll-1",
     type: "troll",
     name: "Troll",
     level: 2,
-    maxHealth: 42,
-    experienceReward: 36,
+    armor: 6,
+    maxDamage: 15,
+    maxHealth: 50,
+    experienceReward: 20,
     position: { x: 16, y: 11, z: 0 },
-    respawnMs: 22000
+    respawnMs: 30000,
+    retreatAtHealth: 15
   }
 ];
 
@@ -324,9 +283,9 @@ export class WorldStateService {
         break;
       }
 
-      if (Math.random() > lootChanceThresholds[entry.chance]) {
-        continue;
-      }
+        if (Math.random() > entry.dropChance) {
+          continue;
+        }
 
       const definition = itemDefinitions[entry.itemKey];
 
@@ -555,7 +514,9 @@ export class WorldStateService {
 
   private toWorldMonster(monster: WorldMonsterState): WorldMonster {
     return {
+      armor: monster.armor,
       id: monster.id,
+      maxDamage: monster.maxDamage,
       type: monster.type,
       name: monster.name,
       level: monster.level,
@@ -568,6 +529,7 @@ export class WorldStateService {
       alive: monster.alive,
       respawnMs: monster.respawnMs,
       respawnDueAt: monster.respawnDueAt,
+      retreatAtHealth: monster.retreatAtHealth,
       spawnX: monster.spawnPosition.x,
       spawnY: monster.spawnPosition.y,
       spawnZ: monster.spawnPosition.z

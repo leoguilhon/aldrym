@@ -1,6 +1,9 @@
 import type {
+  CharacterDamagedEvent,
+  CharacterSkillState,
   CharacterSummary,
   CombatErrorEvent,
+  CombatStance,
   ContainerErrorEvent,
   ContainerState,
   Corpse,
@@ -23,7 +26,13 @@ import type {
   WorldPlayer,
   WorldServerToClientEvents
 } from "@aldrym/shared";
-import { createLocalMap, equipmentSlots, resolveLocalPlayerSpawn, worldEventNames } from "@aldrym/shared";
+import {
+  createLocalMap,
+  equipmentSlots,
+  getRemainingFoodSeconds,
+  resolveLocalPlayerSpawn,
+  worldEventNames
+} from "@aldrym/shared";
 import { useEffect, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { Link, useParams } from "react-router-dom";
 import { io, type Socket } from "socket.io-client";
@@ -327,10 +336,38 @@ function Meter({
   );
 }
 
+function SkillMeter({ label, skill }: { label: string; skill: CharacterSkillState }) {
+  return (
+    <div className="skill-meter">
+      <div className="skill-meter__header">
+        <span>{label}</span>
+        <strong>{skill.level}</strong>
+      </div>
+      <div className="skill-meter__track">
+        <span style={{ width: `${skill.progressPercent}%` }} />
+      </div>
+      <small>{Math.floor(skill.progressPercent)}%</small>
+    </div>
+  );
+}
+
+function formatCombatStance(stance: CombatStance): string {
+  switch (stance) {
+    case "offensive":
+      return "Full Attack";
+    case "defensive":
+      return "Full Defense";
+    default:
+      return "Balanced";
+  }
+}
+
 function GameViewport({
   activeCombatMonsterId,
   corpses,
   groundItems,
+  lastCharacterDamage,
+  lastMonsterDamage,
   localCharacterId,
   monsters,
   noticeMessage,
@@ -349,6 +386,8 @@ function GameViewport({
   activeCombatMonsterId: string | null;
   corpses: Corpse[];
   groundItems: GroundItem[];
+  lastCharacterDamage: { characterId: string; damage: number; nonce: number } | null;
+  lastMonsterDamage: { damage: number; monsterId: string; nonce: number } | null;
   localCharacterId: string;
   monsters: WorldMonster[];
   noticeMessage: string | null;
@@ -376,6 +415,8 @@ function GameViewport({
     setGroundItems: (nextGroundItems: GroundItem[]) => void;
     setMonsters: (nextMonsters: WorldMonster[]) => void;
     setPlayers: (nextPlayers: WorldPlayer[]) => void;
+    showMonsterDamage: (monsterId: string, damage: number) => void;
+    showPlayerDamage: (characterId: string, damage: number) => void;
   } | null>(null);
   const activeCombatMonsterIdRef = useRef(activeCombatMonsterId);
   const attackMonsterRef = useRef(onAttackMonster);
@@ -412,6 +453,22 @@ function GameViewport({
     groundItemsRef.current = groundItems;
     gameRef.current?.setGroundItems(groundItems);
   }, [groundItems]);
+
+  useEffect(() => {
+    if (!lastMonsterDamage) {
+      return;
+    }
+
+    gameRef.current?.showMonsterDamage(lastMonsterDamage.monsterId, lastMonsterDamage.damage);
+  }, [lastMonsterDamage]);
+
+  useEffect(() => {
+    if (!lastCharacterDamage) {
+      return;
+    }
+
+    gameRef.current?.showPlayerDamage(lastCharacterDamage.characterId, lastCharacterDamage.damage);
+  }, [lastCharacterDamage]);
 
   useEffect(() => {
     monstersRef.current = monsters;
@@ -677,13 +734,58 @@ function getItemIconPath(itemKey: string): string {
       return "/assets/items/chipped_dagger.png";
     case "gold_coin":
       return "/assets/items/gold_coin.png";
+    case "meat":
+      return "/assets/items/meat.svg";
+    case "patched_tunic":
+      return "/assets/items/patched_tunic.svg";
+    case "splintered_shield":
+      return "/assets/items/splintered_shield.svg";
     default:
       return "/assets/items/gold_coin.png";
   }
 }
 
-function getItemTooltip(item: Pick<InventoryItem | CorpseItem, "itemKey" | "itemType" | "name" | "quantity" | "stackable">): string {
-  return `${item.name}${item.stackable || item.quantity > 1 ? ` x${item.quantity}` : ""}\nType: ${item.itemType}`;
+function getItemTooltip(
+  item: Pick<
+    InventoryItem | CorpseItem,
+    | "armor"
+    | "attack"
+    | "defense"
+    | "foodSeconds"
+    | "itemKey"
+    | "itemType"
+    | "name"
+    | "quantity"
+    | "stackable"
+    | "weaponSkill"
+  >
+): string {
+  const lines = [
+    `${item.name}${item.stackable || item.quantity > 1 ? ` x${item.quantity}` : ""}`,
+    `Type: ${item.itemType}`
+  ];
+
+  if (item.attack) {
+    lines.push(`Attack: ${item.attack}`);
+  }
+
+  if (item.defense) {
+    lines.push(`Defense: ${item.defense}`);
+  }
+
+  if (item.armor) {
+    lines.push(`Armor: ${item.armor}`);
+  }
+
+  if (item.weaponSkill) {
+    lines.push(`Skill: ${item.weaponSkill}`);
+  }
+
+  if (item.foodSeconds) {
+    lines.push(`Food: ${item.foodSeconds}s`);
+  }
+
+  return lines.join("\n");
 }
 
 function ItemIcon({ item }: { item: Pick<InventoryItem | CorpseItem, "itemKey" | "name" | "quantity" | "stackable"> }) {
@@ -773,7 +875,8 @@ function ItemSlot({
   onTakeCorpseItemToTarget,
   onTakeGroundItemToTarget,
   onOpenContainer,
-  onQuickEquip
+  onQuickEquip,
+  onUseItem
 }: {
   item: InventoryItem | null;
   label: string;
@@ -788,6 +891,7 @@ function ItemSlot({
   onTakeGroundItemToTarget: (groundItemId: string, target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>) => void;
   onOpenContainer: (containerItemId: string) => void;
   onQuickEquip: (itemId: string) => void;
+  onUseItem: (itemId: string) => void;
 }) {
   const [dragState, setDragState] = useState<"none" | "valid" | "invalid">("none");
   const target = getItemSlotDropTarget(item, location);
@@ -814,6 +918,11 @@ function ItemSlot({
         }
 
         event.preventDefault();
+
+        if (item.foodSeconds) {
+          onUseItem(item.id);
+          return;
+        }
 
         if (item.isContainer) {
           onOpenContainer(item.id);
@@ -883,7 +992,8 @@ function EquipmentPanel({
   onTakeCorpseItemToTarget,
   onTakeGroundItemToTarget,
   onOpenContainer,
-  onQuickEquip
+  onQuickEquip,
+  onUseItem
 }: {
   slots: EquipmentSlotState[];
   onDropItem: (itemId: string, target: InventoryMoveTarget) => void;
@@ -896,6 +1006,7 @@ function EquipmentPanel({
   onTakeGroundItemToTarget: (groundItemId: string, target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>) => void;
   onOpenContainer: (containerItemId: string) => void;
   onQuickEquip: (itemId: string) => void;
+  onUseItem: (itemId: string) => void;
 }) {
   return (
     <div className="equipment-paperdoll" role="list">
@@ -910,6 +1021,7 @@ function EquipmentPanel({
             onTakeGroundItemToTarget={onTakeGroundItemToTarget}
             onOpenContainer={onOpenContainer}
             onQuickEquip={onQuickEquip}
+            onUseItem={onUseItem}
           />
         </div>
       ))}
@@ -925,6 +1037,7 @@ function BackpackWindow({
   onTakeGroundItemToTarget,
   onOpenContainer,
   onQuickEquip,
+  onUseItem,
   onWindowDragStart
 }: {
   container: ContainerState;
@@ -939,6 +1052,7 @@ function BackpackWindow({
   onTakeGroundItemToTarget: (groundItemId: string, target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>) => void;
   onOpenContainer: (containerItemId: string) => void;
   onQuickEquip: (itemId: string) => void;
+  onUseItem: (itemId: string) => void;
   onWindowDragStart: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const occupiedSlotCount = container.slots.filter((slot) => slot.item).length;
@@ -971,6 +1085,7 @@ function BackpackWindow({
             onTakeGroundItemToTarget={onTakeGroundItemToTarget}
             onOpenContainer={onOpenContainer}
             onQuickEquip={onQuickEquip}
+            onUseItem={onUseItem}
           />
         ))}
       </div>
@@ -995,11 +1110,14 @@ export function GamePage() {
   const [equipmentItems, setEquipmentItems] = useState<EquipmentSlotState[]>(
     equipmentSlots.map((slot) => ({ slot, item: null }))
   );
+  const [clockMs, setClockMs] = useState(() => Date.now());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [groundDragPreview, setGroundDragPreview] = useState<GroundDragPreview | null>(null);
   const [groundItems, setGroundItems] = useState<GroundItem[]>([]);
   const [isLoadingCharacter, setIsLoadingCharacter] = useState(true);
+  const [lastCharacterDamage, setLastCharacterDamage] = useState<{ characterId: string; damage: number; nonce: number } | null>(null);
+  const [lastMonsterDamage, setLastMonsterDamage] = useState<{ damage: number; monsterId: string; nonce: number } | null>(null);
   const [lootErrorMessage, setLootErrorMessage] = useState<string | null>(null);
   const [monsters, setMonsters] = useState<WorldMonster[]>([]);
   const [openedCorpses, setOpenedCorpses] = useState<Corpse[]>([]);
@@ -1066,6 +1184,8 @@ export function GamePage() {
     setFeedbackMessage(null);
     setGroundItems([]);
     setLootErrorMessage(null);
+    setLastCharacterDamage(null);
+    setLastMonsterDamage(null);
     setMonsters([]);
     setOpenedCorpses([]);
     setPlayers([]);
@@ -1120,6 +1240,11 @@ export function GamePage() {
     });
 
     socket.on(worldEventNames.monsterDamaged, (payload) => {
+      setLastMonsterDamage({
+        damage: payload.damage,
+        monsterId: payload.monsterId,
+        nonce: Date.now()
+      });
       setMonsters((currentMonsters) =>
         updateWorldMonster(currentMonsters, payload.monsterId, {
           health: payload.health,
@@ -1223,6 +1348,18 @@ export function GamePage() {
 
     socket.on(worldEventNames.containerError, (payload: ContainerErrorEvent) => {
       setFeedbackMessage(payload.message);
+    });
+
+    socket.on(worldEventNames.characterUpdated, (payload) => {
+      setCharacter(payload.character);
+    });
+
+    socket.on(worldEventNames.characterDamaged, (payload: CharacterDamagedEvent) => {
+      setLastCharacterDamage({
+        characterId: payload.characterId,
+        damage: payload.damage,
+        nonce: Date.now()
+      });
     });
 
     socket.on(worldEventNames.characterExperienceUpdated, (payload) => {
@@ -1343,6 +1480,8 @@ export function GamePage() {
       setCorpses([]);
       setEquipmentItems(equipmentSlots.map((slot) => ({ slot, item: null })));
       setGroundItems([]);
+      setLastCharacterDamage(null);
+      setLastMonsterDamage(null);
       setMonsters([]);
       setOpenedCorpses([]);
       setPlayers([]);
@@ -1373,8 +1512,19 @@ export function GamePage() {
     };
   }, [feedbackMessage]);
 
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      setClockMs(Date.now());
+    }, 1000);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, []);
+
   const localPlayer = character ? players.find((player) => player.characterId === character.id) ?? null : null;
   const localPosition = character ? localPlayer ?? resolveLocalPlayerSpawn(localMap, character) : null;
+  const foodRemainingSeconds = character ? getRemainingFoodSeconds(character.food.foodExpiresAt, clockMs) : 0;
   const isWorldReady = character !== null && connectionState === "joined" && localPlayer !== null;
   const containerWindowDescriptors: ContainerWindowDescriptor[] = [
     ...containers.map((container) => ({
@@ -1583,6 +1733,26 @@ export function GamePage() {
     }
 
     socket.emit(worldEventNames.groundItemTake, { groundItemId, target });
+  };
+
+  const handleUseItem = (itemId: string) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.inventoryUseItem, { itemId });
+  };
+
+  const handleSetCombatStance = (stance: CombatStance) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.combatSetStance, { stance });
   };
 
   useEffect(() => {
@@ -1836,6 +2006,8 @@ export function GamePage() {
                 activeCombatMonsterId={activeCombatMonsterId}
                 corpses={corpses}
                 groundItems={groundItems}
+                lastCharacterDamage={lastCharacterDamage}
+                lastMonsterDamage={lastMonsterDamage}
                 localCharacterId={character.id}
                 monsters={monsters}
                 noticeMessage={feedbackMessage}
@@ -1878,6 +2050,7 @@ export function GamePage() {
                           onTakeGroundItemToTarget={handleTakeGroundItemToTarget}
                           onOpenContainer={handleOpenContainer}
                           onQuickEquip={handleQuickEquip}
+                          onUseItem={handleUseItem}
                           onWindowDragStart={(event) => handleContainerWindowDragStart(windowDescriptor.id, event)}
                         />
                       ) : null}
@@ -1956,33 +2129,63 @@ export function GamePage() {
             onTakeGroundItemToTarget={handleTakeGroundItemToTarget}
             onOpenContainer={handleOpenContainer}
             onQuickEquip={handleQuickEquip}
+            onUseItem={handleUseItem}
             slots={equipmentItems}
           />
         </section>
 
         <section className="client-panel">
           <div className="client-panel__header">
-            <span>Status</span>
-            <strong>MVP</strong>
+            <span>Combat</span>
+            <strong>{formatCombatStance(character.combatStats.stance)}</strong>
           </div>
           <dl className="client-stat-grid">
             <div>
               <dt>Attack</dt>
-              <dd>Basic</dd>
+              <dd>{character.combatStats.attackValue}</dd>
             </div>
             <div>
               <dt>Defense</dt>
-              <dd>Basic</dd>
+              <dd>{character.combatStats.defenseValue}</dd>
             </div>
             <div>
-              <dt>Health</dt>
-              <dd>{character.maxHealth}</dd>
+              <dt>Armor</dt>
+              <dd>{character.combatStats.armorValue}</dd>
             </div>
             <div>
-              <dt>Mana</dt>
-              <dd>{character.maxMana}</dd>
+              <dt>Food</dt>
+              <dd>{foodRemainingSeconds > 0 ? `${foodRemainingSeconds}s` : "Hungry"}</dd>
             </div>
           </dl>
+          <div className="combat-stance-group" role="group" aria-label="Combat stance">
+            {(["offensive", "balanced", "defensive"] as CombatStance[]).map((stance) => (
+              <button
+                className={stance === character.combatStats.stance ? "combat-stance-button combat-stance-button--active" : "combat-stance-button"}
+                key={stance}
+                onClick={() => handleSetCombatStance(stance)}
+                type="button"
+              >
+                {formatCombatStance(stance)}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="client-panel">
+          <div className="client-panel__header">
+            <span>Skills</span>
+            <strong>{character.combatStats.attackSkill}</strong>
+          </div>
+          <div className="skill-meter-list">
+            <SkillMeter label="Fist Fighting" skill={character.skills.fist} />
+            <SkillMeter label="Sword Fighting" skill={character.skills.sword} />
+            <SkillMeter label="Axe Fighting" skill={character.skills.axe} />
+            <SkillMeter label="Club Fighting" skill={character.skills.club} />
+            <SkillMeter label="Distance Fighting" skill={character.skills.distance} />
+            <SkillMeter label="Shielding" skill={character.skills.shielding} />
+            <SkillMeter label="Magic Level" skill={character.skills.magicLevel} />
+            <SkillMeter label="Fishing" skill={character.skills.fishing} />
+          </div>
         </section>
         {worldErrorMessage ? <p className="form-message form-message--error">{worldErrorMessage}</p> : null}
       </aside>

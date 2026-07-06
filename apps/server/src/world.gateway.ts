@@ -1,7 +1,11 @@
 import type {
   AttackMonsterRequest,
+  CharacterDamagedEvent,
   CharacterExperienceUpdatedEvent,
   CharacterLevelUpEvent,
+  CharacterSummary,
+  CharacterUpdatedEvent,
+  CombatStance,
   CombatErrorEvent,
   CombatStoppedEvent,
   ContainerCloseRequest,
@@ -24,6 +28,7 @@ import type {
   InventoryDropItemRequest,
   InventoryEquipItemRequest,
   InventoryMoveItemRequest,
+  InventoryUseItemRequest,
   InventoryUnequipItemRequest,
   InventoryUpdatedEvent,
   MonsterDamagedEvent,
@@ -35,6 +40,7 @@ import type {
   PlayerMoveRequest,
   PlayerMovedEvent,
   Position,
+  SetCombatStanceRequest,
   WorldClientToServerEvents,
   WorldCorpsesEvent,
   WorldErrorEvent,
@@ -46,7 +52,9 @@ import type {
   WorldServerToClientEvents
 } from "@aldrym/shared";
 import {
+  combatStances,
   createLocalMap,
+  getRegenerationPerSecond,
   getMovementCooldownMs,
   getNextPosition,
   getTileType,
@@ -85,7 +93,9 @@ const MONSTER_PURSUIT_RANGE = 8;
 const PLAYER_SCREEN_TILE_HALF_HEIGHT = 5;
 const PLAYER_SCREEN_TILE_HALF_WIDTH = 7;
 const MONSTER_THINK_INTERVAL_MS = 700;
-const PLAYER_ATTACK_INTERVAL_MS = 1200;
+const PLAYER_ATTACK_INTERVAL_MS = 2000;
+const MONSTER_ATTACK_INTERVAL_MS = 2000;
+const PLAYER_REGENERATION_INTERVAL_MS = 1000;
 const RESPAWN_WARNING_MS = 3000;
 const EMPTY_CORPSE_DECAY_MS = 15000;
 const ITEM_THROW_RANGE = 5;
@@ -120,10 +130,16 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   private readonly lockedCorpseIds = new Set<string>();
   private readonly lockedCorpseItemKeys = new Set<string>();
   private readonly lockedGroundItemIds = new Set<string>();
+  private readonly playerCombatStanceBySocketId = new Map<string, CombatStance>();
+  private readonly playerFoodExpiresAtBySocketId = new Map<string, number>();
+  private readonly playerHealthRegenCarryBySocketId = new Map<string, number>();
+  private readonly playerManaRegenCarryBySocketId = new Map<string, number>();
+  private readonly nextMonsterAttackAtByMonsterId = new Map<string, number>();
   private readonly nextPlayerAttackAtBySocketId = new Map<string, number>();
   private readonly nextPlayerMoveAtBySocketId = new Map<string, number>();
   private readonly openedContainerIdsBySocketId = new Map<string, Set<string>>();
   private monsterThinkTimer: ReturnType<typeof setInterval> | null = null;
+  private playerRegenerationTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     @Inject(AuthService) private readonly authService: AuthService,
@@ -150,8 +166,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     });
 
     this.monsterThinkTimer ??= setInterval(() => {
-      this.performMonsterPursuitTick();
+      void this.performMonsterPursuitTick();
     }, MONSTER_THINK_INTERVAL_MS);
+    this.playerRegenerationTimer ??= setInterval(() => {
+      void this.performPlayerRegenerationTick();
+    }, PLAYER_REGENERATION_INTERVAL_MS);
   }
 
   async handleDisconnect(client: WorldSocket): Promise<void> {
@@ -159,6 +178,10 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     this.nextPlayerAttackAtBySocketId.delete(client.id);
     this.nextPlayerMoveAtBySocketId.delete(client.id);
     this.openedContainerIdsBySocketId.delete(client.id);
+    this.playerCombatStanceBySocketId.delete(client.id);
+    this.playerFoodExpiresAtBySocketId.delete(client.id);
+    this.playerHealthRegenCarryBySocketId.delete(client.id);
+    this.playerManaRegenCarryBySocketId.delete(client.id);
 
     const removedPlayer = this.worldStateService.removePlayer(client.id);
 
@@ -224,7 +247,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     try {
-      const character = await this.charactersService.findByIdForUser(user.id, characterId);
+      const character = await this.charactersService.findByIdForUser(user.id, characterId, "balanced");
       const position = resolveLocalPlayerSpawn(this.localMap, character);
       const onlinePlayer = {
         socketId: client.id,
@@ -242,6 +265,10 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
       this.nextPlayerAttackAtBySocketId.delete(client.id);
       this.nextPlayerMoveAtBySocketId.delete(client.id);
+      this.playerCombatStanceBySocketId.set(client.id, "balanced");
+      this.playerFoodExpiresAtBySocketId.set(client.id, character.food.foodExpiresAt ? Date.parse(character.food.foodExpiresAt) : 0);
+      this.playerHealthRegenCarryBySocketId.set(client.id, 0);
+      this.playerManaRegenCarryBySocketId.set(client.id, 0);
       this.worldStateService.addPlayer(onlinePlayer);
 
       const worldPlayer = this.worldStateService.toWorldPlayer(onlinePlayer);
@@ -275,6 +302,9 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       client.emit(worldEventNames.worldGroundItems, groundItemsPayload);
       client.emit(worldEventNames.inventoryUpdated, inventoryPayload);
       client.emit(worldEventNames.equipmentUpdated, equipmentPayload);
+      client.emit(worldEventNames.characterUpdated, {
+        character
+      });
       client.broadcast.emit(worldEventNames.playerJoined, {
         player: worldPlayer
       });
@@ -391,6 +421,29 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   @SubscribeMessage(worldEventNames.combatStop)
   handleCombatStop(@ConnectedSocket() client: WorldSocket): void {
     this.stopCombatSession(client, "manual");
+  }
+
+  @SubscribeMessage(worldEventNames.combatSetStance)
+  async handleCombatSetStance(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: SetCombatStanceRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+    const stance = payload?.stance;
+
+    if (!user || !activePlayer) {
+      this.emitCombatError(client, "Join the world before changing your combat stance.", "world_join_required");
+      return;
+    }
+
+    if (!stance || !combatStances.includes(stance)) {
+      this.emitCombatError(client, "That combat stance does not exist.", "invalid_combat_stance");
+      return;
+    }
+
+    this.playerCombatStanceBySocketId.set(client.id, stance);
+    await this.emitCharacterState(client, user.id, activePlayer.characterId);
   }
 
   @SubscribeMessage(worldEventNames.corpseOpen)
@@ -594,15 +647,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
           await this.charactersService.addItemToInventoryForUserCharacter(
             user.id,
             activePlayer.characterId,
-            {
-              itemKey: takeResult.item.itemKey,
-              name: takeResult.item.name,
-              stackable: takeResult.item.stackable,
-              itemType: takeResult.item.itemType,
-              compatibleEquipmentSlots: takeResult.item.compatibleEquipmentSlots,
-              isContainer: takeResult.item.isContainer,
-              containerSize: takeResult.item.containerSize
-            },
+            takeResult.item,
             takeResult.item.quantity
           );
         }
@@ -872,6 +917,39 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       await this.emitInventoryState(client, user.id, activePlayer.characterId, "Equipment updated.");
     } catch (error) {
       this.emitEquipmentOperationError(client, error);
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.inventoryUseItem)
+  async handleInventoryUseItem(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: InventoryUseItemRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+    const itemId = payload?.itemId?.trim();
+
+    if (!user || !activePlayer) {
+      this.emitInventoryError(client, "Join the world before using items.", "world_join_required");
+      return;
+    }
+
+    if (!itemId) {
+      this.emitInventoryError(client, "An item id is required.", "invalid_item_id");
+      return;
+    }
+
+    try {
+      const result = await this.charactersService.useItemForUserCharacter(
+        user.id,
+        activePlayer.characterId,
+        itemId,
+        this.getCombatStance(client.id)
+      );
+
+      await this.emitInventoryState(client, user.id, activePlayer.characterId, result.message, result.character);
+    } catch (error) {
+      this.emitInventoryOperationError(client, error);
     }
   }
 
@@ -1234,9 +1312,25 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     this.nextPlayerAttackAtBySocketId.set(client.id, now + PLAYER_ATTACK_INTERVAL_MS);
+    const stance = this.getCombatStance(client.id);
+    const character = await this.charactersService.findByIdForUser(user.id, activePlayer.characterId, stance);
+    const rawDamage = this.rollDamage(0, Math.max(0, character.combatStats.attackValue * 2));
+    const armorReduction = this.rollArmorReduction(monster.armor, rawDamage);
+    const damage = Math.max(0, rawDamage - armorReduction);
+    const skilledCharacter = await this.charactersService.addSkillProgressForUserCharacter(
+      user.id,
+      activePlayer.characterId,
+      character.combatStats.attackSkill,
+      1,
+      stance
+    );
 
-    // Temporary MVP damage: original flat melee roll until combat stats exist.
-    const damage = this.rollDamage(8, 16);
+    await this.emitCharacterState(client, user.id, activePlayer.characterId, skilledCharacter);
+
+    if (damage <= 0) {
+      return;
+    }
+
     const damagedMonster = this.worldStateService.damageMonster(monster.id, damage);
 
     if (!damagedMonster) {
@@ -1279,17 +1373,10 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       const result = await this.charactersService.addExperienceForUserCharacter(
         user.id,
         activePlayer.characterId,
-        damagedMonster.experienceReward
+        damagedMonster.experienceReward,
+        stance
       );
       const updatedCharacter = result.character;
-
-      const updatedWorldPlayer = this.worldStateService.updatePlayerStats(client.id, {
-        level: updatedCharacter.level,
-        health: updatedCharacter.health,
-        maxHealth: updatedCharacter.maxHealth,
-        mana: updatedCharacter.mana,
-        maxMana: updatedCharacter.maxMana
-      });
 
       const experiencePayload: CharacterExperienceUpdatedEvent = {
         characterId: updatedCharacter.id,
@@ -1303,12 +1390,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       };
 
       client.emit(worldEventNames.characterExperienceUpdated, experiencePayload);
-
-      if (updatedWorldPlayer) {
-        this.server.emit(worldEventNames.playerMoved, {
-          player: this.worldStateService.toWorldPlayer(updatedWorldPlayer)
-        });
-      }
+      await this.emitCharacterState(client, user.id, activePlayer.characterId, updatedCharacter);
 
       if (result.leveledUp) {
         const levelUpPayload: CharacterLevelUpEvent = {
@@ -1367,7 +1449,40 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     return null;
   }
 
-  private performMonsterPursuitTick(): void {
+  private getRetreatMonsterPosition(monster: Position & { id: string }, target: Position): Position | null {
+    const deltaX = target.x - monster.x;
+    const deltaY = target.y - monster.y;
+    const horizontalStep = deltaX === 0 ? null : { ...monster, x: monster.x - Math.sign(deltaX) };
+    const verticalStep = deltaY === 0 ? null : { ...monster, y: monster.y - Math.sign(deltaY) };
+    const candidates =
+      Math.abs(deltaX) >= Math.abs(deltaY)
+        ? [horizontalStep, verticalStep]
+        : [verticalStep, horizontalStep];
+
+    for (const candidate of candidates) {
+      if (!candidate) {
+        continue;
+      }
+
+      if (!isWalkableTile(this.localMap, candidate)) {
+        continue;
+      }
+
+      if (this.worldStateService.isAliveMonsterAt(candidate, monster.id)) {
+        continue;
+      }
+
+      if (this.worldStateService.isPlayerAt(candidate)) {
+        continue;
+      }
+
+      return candidate;
+    }
+
+    return null;
+  }
+
+  private async performMonsterPursuitTick(): Promise<void> {
     const players = this.worldStateService.listPlayers();
 
     if (players.length === 0) {
@@ -1381,13 +1496,25 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
       const target = this.findNearestPlayerInPursuitRange(monster, players);
 
-      if (!target || this.isAdjacent(monster, target)) {
+      if (!target) {
         continue;
       }
 
-      const nextPosition = this.getNextMonsterPosition(monster, target);
+      const isRetreating = monster.retreatAtHealth !== null && monster.health <= monster.retreatAtHealth;
+
+      if (this.isAdjacent(monster, target) && !isRetreating) {
+        await this.performMonsterAttack(monster, target.characterId);
+        continue;
+      }
+
+      const nextPosition = isRetreating
+        ? this.getRetreatMonsterPosition(monster, target)
+        : this.getNextMonsterPosition(monster, target);
 
       if (!nextPosition) {
+        if (this.isAdjacent(monster, target)) {
+          await this.performMonsterAttack(monster, target.characterId);
+        }
         continue;
       }
 
@@ -1402,6 +1529,118 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       };
 
       this.server.emit(worldEventNames.monsterMoved, movedPayload);
+    }
+  }
+
+  private async performMonsterAttack(monster: Position & { id: string; armor: number; maxDamage: number }, characterId: string): Promise<void> {
+    const activePlayer = this.worldStateService.getPlayerByCharacterId(characterId);
+
+    if (!activePlayer) {
+      return;
+    }
+
+    const client = this.server.sockets.sockets.get(activePlayer.socketId) as WorldSocket | undefined;
+
+    if (!client) {
+      return;
+    }
+
+    const now = Date.now();
+    const nextAttackAt = this.nextMonsterAttackAtByMonsterId.get(monster.id) ?? 0;
+
+    if (now < nextAttackAt) {
+      return;
+    }
+
+    this.nextMonsterAttackAtByMonsterId.set(monster.id, now + MONSTER_ATTACK_INTERVAL_MS);
+
+    const stance = this.getCombatStance(activePlayer.socketId);
+    const character = await this.charactersService.findByIdForUser(activePlayer.userId, activePlayer.characterId, stance);
+    const rawDamage = this.rollDamage(1, monster.maxDamage);
+    const defenseReduction = this.rollDefenseReduction(character.combatStats.defenseValue);
+    const damageAfterDefense = Math.max(0, rawDamage - defenseReduction);
+    const armorReduction = this.rollArmorReduction(character.combatStats.armorValue, damageAfterDefense);
+    const damage = Math.max(0, damageAfterDefense - armorReduction);
+    let updatedCharacter: CharacterSummary | null = null;
+
+    if (character.combatStats.defenseSkill === "shielding") {
+      updatedCharacter = await this.charactersService.addSkillProgressForUserCharacter(
+        activePlayer.userId,
+        activePlayer.characterId,
+        "shielding",
+        1,
+        stance
+      );
+    }
+
+    if (damage <= 0) {
+      if (updatedCharacter) {
+        await this.emitCharacterState(client, activePlayer.userId, activePlayer.characterId, updatedCharacter);
+      }
+      return;
+    }
+
+    updatedCharacter = await this.charactersService.applyDamageToUserCharacter(
+      activePlayer.userId,
+      activePlayer.characterId,
+      damage,
+      stance
+    );
+
+    client.emit(worldEventNames.characterDamaged, {
+      characterId: updatedCharacter.id,
+      damage,
+      health: updatedCharacter.health,
+      maxHealth: updatedCharacter.maxHealth
+    } satisfies CharacterDamagedEvent);
+    await this.emitCharacterState(client, activePlayer.userId, activePlayer.characterId, updatedCharacter);
+  }
+
+  private async performPlayerRegenerationTick(): Promise<void> {
+    const now = Date.now();
+
+    for (const socket of this.server.sockets.sockets.values()) {
+      const client = socket as WorldSocket;
+      const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+      const foodExpiresAt = this.playerFoodExpiresAtBySocketId.get(client.id) ?? 0;
+
+      if (!activePlayer || foodExpiresAt <= now) {
+        this.playerFoodExpiresAtBySocketId.delete(client.id);
+        this.playerHealthRegenCarryBySocketId.delete(client.id);
+        this.playerManaRegenCarryBySocketId.delete(client.id);
+        continue;
+      }
+
+      const regeneration = getRegenerationPerSecond(activePlayer.characterClass);
+      const nextHealthCarry =
+        activePlayer.health < activePlayer.maxHealth
+          ? (this.playerHealthRegenCarryBySocketId.get(client.id) ?? 0) + regeneration.health
+          : 0;
+      const nextManaCarry =
+        activePlayer.mana < activePlayer.maxMana
+          ? (this.playerManaRegenCarryBySocketId.get(client.id) ?? 0) + regeneration.mana
+          : 0;
+      const healthGain = Math.floor(nextHealthCarry);
+      const manaGain = Math.floor(nextManaCarry);
+
+      this.playerHealthRegenCarryBySocketId.set(client.id, nextHealthCarry - healthGain);
+      this.playerManaRegenCarryBySocketId.set(client.id, nextManaCarry - manaGain);
+
+      if (healthGain <= 0 && manaGain <= 0) {
+        continue;
+      }
+
+      const updatedCharacter = await this.charactersService.regenerateUserCharacter(
+        activePlayer.userId,
+        activePlayer.characterId,
+        {
+          health: healthGain,
+          mana: manaGain
+        },
+        this.getCombatStance(client.id)
+      );
+
+      await this.emitCharacterState(client, activePlayer.userId, activePlayer.characterId, updatedCharacter);
     }
   }
 
@@ -1551,7 +1790,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     client: WorldSocket,
     userId: string,
     characterId: string,
-    message?: string
+    message?: string,
+    character?: CharacterSummary
   ): Promise<void> {
     client.emit(worldEventNames.inventoryUpdated, {
       items: await this.charactersService.listInventoryForUserCharacter(userId, characterId),
@@ -1563,6 +1803,51 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     });
 
     await this.emitOpenedContainerStates(client, userId, characterId, message);
+    await this.emitCharacterState(client, userId, characterId, character);
+  }
+
+  private async emitCharacterState(
+    client: WorldSocket,
+    userId: string,
+    characterId: string,
+    character?: CharacterSummary
+  ): Promise<CharacterSummary> {
+    const nextCharacter = character ?? (await this.charactersService.findByIdForUser(userId, characterId, this.getCombatStance(client.id)));
+    this.syncWorldPlayerState(client.id, nextCharacter);
+    this.playerFoodExpiresAtBySocketId.set(client.id, nextCharacter.food.foodExpiresAt ? Date.parse(nextCharacter.food.foodExpiresAt) : 0);
+
+    client.emit(worldEventNames.characterUpdated, {
+      character: nextCharacter
+    } satisfies CharacterUpdatedEvent);
+    client.emit(worldEventNames.characterStatsUpdated, {
+      characterId: nextCharacter.id,
+      health: nextCharacter.health,
+      maxHealth: nextCharacter.maxHealth,
+      mana: nextCharacter.mana,
+      maxMana: nextCharacter.maxMana
+    });
+
+    return nextCharacter;
+  }
+
+  private syncWorldPlayerState(socketId: string, character: CharacterSummary): void {
+    const updatedWorldPlayer = this.worldStateService.updatePlayerStats(socketId, {
+      level: character.level,
+      health: character.health,
+      maxHealth: character.maxHealth,
+      mana: character.mana,
+      maxMana: character.maxMana
+    });
+
+    if (updatedWorldPlayer) {
+      this.server.emit(worldEventNames.playerMoved, {
+        player: this.worldStateService.toWorldPlayer(updatedWorldPlayer)
+      });
+    }
+  }
+
+  private getCombatStance(socketId: string): CombatStance {
+    return this.playerCombatStanceBySocketId.get(socketId) ?? "balanced";
   }
 
   private async emitOpenedContainerStates(
@@ -1791,6 +2076,28 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   }
 
   private rollDamage(minimum: number, maximum: number): number {
+    if (maximum <= minimum) {
+      return Math.max(0, Math.floor(minimum));
+    }
+
     return Math.floor(Math.random() * (maximum - minimum + 1)) + minimum;
+  }
+
+  private rollDefenseReduction(defenseValue: number): number {
+    if (defenseValue <= 0) {
+      return 0;
+    }
+
+    return this.rollDamage(0, Math.max(0, defenseValue));
+  }
+
+  private rollArmorReduction(totalArmor: number, damageAfterDefense: number): number {
+    if (totalArmor <= 0 || damageAfterDefense <= 0) {
+      return 0;
+    }
+
+    const minimumReduction = Math.max(0, Math.floor(totalArmor / 2));
+    const maximumReduction = Math.max(minimumReduction, minimumReduction * 2 - 1);
+    return Math.min(damageAfterDefense, this.rollDamage(minimumReduction, maximumReduction));
   }
 }

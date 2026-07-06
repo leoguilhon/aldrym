@@ -1,5 +1,8 @@
 import type {
+  CharacterClass,
   CharacterSummary,
+  CharacterSkillKey,
+  CombatStance,
   ContainerState,
   EquipmentSlot,
   EquipmentSlotState,
@@ -9,15 +12,22 @@ import type {
   ItemDefinition,
   Position
 } from "@aldrym/shared";
-import { equipmentSlots } from "@aldrym/shared";
+import {
+  addSkillProgress,
+  equipmentSlots,
+  getBaseMaximumHealthForLevel,
+  getBaseMaximumManaForLevel,
+  getLevelFromExperience,
+  getMaximumFoodSeconds,
+  itemDefinitions
+} from "@aldrym/shared";
 import { ConflictException, Inject, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
-import type { CharacterItem, Prisma } from "@prisma/client";
+import type { Character, CharacterItem, Prisma } from "@prisma/client";
 import { compare } from "bcryptjs";
 
 import { isPrismaUniqueConstraintError } from "../prisma/prisma-error.util";
 import { PrismaService } from "../prisma/prisma.service";
 import { UsersService } from "../users/users.service";
-import { itemDefinitions } from "../world-state.service";
 import { toCharacterSummary } from "./character.mapper";
 import { CreateCharacterDto } from "./dto/create-character.dto";
 import { DeleteCharacterDto } from "./dto/delete-character.dto";
@@ -47,6 +57,7 @@ const EQUIPMENT_LOCATION = "equipment";
 
 type InventoryLocation = "root" | "container" | "equipment";
 type InventoryTransaction = Prisma.TransactionClient;
+type CharacterWithEquipment = Character & { items: Pick<CharacterItem, "equipmentSlot" | "itemKey" | "locationType">[] };
 
 @Injectable()
 export class CharactersService {
@@ -57,30 +68,59 @@ export class CharactersService {
 
   async create(userId: string, createCharacterDto: CreateCharacterDto): Promise<CharacterSummary> {
     try {
+      const maxHealth = getBaseMaximumHealthForLevel(createCharacterDto.characterClass, 1);
+      const maxMana = getBaseMaximumManaForLevel(createCharacterDto.characterClass, 1);
       const character = await this.prisma.$transaction(async (tx) => {
         const createdCharacter = await tx.character.create({
           data: {
             userId,
             name: createCharacterDto.name,
             gender: createCharacterDto.gender,
-            characterClass: createCharacterDto.characterClass
+            characterClass: createCharacterDto.characterClass,
+            health: maxHealth,
+            maxHealth,
+            mana: maxMana,
+            maxMana
           }
         });
 
-        await tx.characterItem.create({
-          data: {
-            characterId: createdCharacter.id,
-            itemKey: "brown_backpack",
-            quantity: 1,
-            locationType: EQUIPMENT_LOCATION,
-            equipmentSlot: "backpack"
-          }
+        await tx.characterItem.createMany({
+          data: [
+            {
+              characterId: createdCharacter.id,
+              itemKey: "brown_backpack",
+              quantity: 1,
+              locationType: EQUIPMENT_LOCATION,
+              equipmentSlot: "backpack"
+            },
+            {
+              characterId: createdCharacter.id,
+              itemKey: "chipped_dagger",
+              quantity: 1,
+              locationType: EQUIPMENT_LOCATION,
+              equipmentSlot: "weapon"
+            },
+            {
+              characterId: createdCharacter.id,
+              itemKey: "patched_tunic",
+              quantity: 1,
+              locationType: EQUIPMENT_LOCATION,
+              equipmentSlot: "body"
+            },
+            {
+              characterId: createdCharacter.id,
+              itemKey: "splintered_shield",
+              quantity: 1,
+              locationType: EQUIPMENT_LOCATION,
+              equipmentSlot: "shield"
+            }
+          ]
         });
 
         return createdCharacter;
       });
 
-      return toCharacterSummary(character);
+      return this.findByIdForUser(userId, character.id);
     } catch (error) {
       if (isPrismaUniqueConstraintError(error, "name")) {
         throw new ConflictException("Character name is already taken");
@@ -90,17 +130,45 @@ export class CharactersService {
     }
   }
 
-  async findAllForUser(userId: string): Promise<CharacterSummary[]> {
+  async findAllForUser(userId: string, stance: CombatStance = "balanced"): Promise<CharacterSummary[]> {
     const characters = await this.prisma.character.findMany({
+      include: {
+        items: {
+          where: {
+            locationType: EQUIPMENT_LOCATION
+          },
+          select: {
+            equipmentSlot: true,
+            itemKey: true,
+            locationType: true
+          }
+        }
+      },
       where: { userId },
       orderBy: { createdAt: "asc" }
     });
 
-    return characters.map(toCharacterSummary);
+    return characters.map((character) => this.toCharacterSummaryWithCombatStats(character, stance));
   }
 
-  async findByIdForUser(userId: string, characterId: string): Promise<CharacterSummary> {
+  async findByIdForUser(
+    userId: string,
+    characterId: string,
+    stance: CombatStance = "balanced"
+  ): Promise<CharacterSummary> {
     const character = await this.prisma.character.findFirst({
+      include: {
+        items: {
+          where: {
+            locationType: EQUIPMENT_LOCATION
+          },
+          select: {
+            equipmentSlot: true,
+            itemKey: true,
+            locationType: true
+          }
+        }
+      },
       where: {
         id: characterId,
         userId
@@ -111,7 +179,7 @@ export class CharactersService {
       throw new NotFoundException("Character not found");
     }
 
-    return toCharacterSummary(character);
+    return this.toCharacterSummaryWithCombatStats(character, stance);
   }
 
   async listInventoryForUserCharacter(userId: string, characterId: string): Promise<InventorySlot[]> {
@@ -397,7 +465,8 @@ export class CharactersService {
   async addExperienceForUserCharacter(
     userId: string,
     characterId: string,
-    gainedExperience: number
+    gainedExperience: number,
+    stance: CombatStance = "balanced"
   ): Promise<{ character: CharacterSummary; leveledUp: boolean }> {
     const character = await this.prisma.character.findFirst({
       where: {
@@ -410,19 +479,11 @@ export class CharactersService {
       throw new NotFoundException("Character not found");
     }
 
-    let nextLevel = character.level;
-    const nextExperience = character.experience + gainedExperience;
-
-    // Temporary MVP balancing: these original thresholds are intentionally simple
-    // until combat pacing is tuned around real creatures and progression.
-    while (nextExperience >= this.getExperienceRequiredForLevel(nextLevel)) {
-      nextLevel += 1;
-    }
-
+    const nextExperience = Math.max(0, character.experience + Math.max(0, Math.floor(gainedExperience)));
+    const nextLevel = getLevelFromExperience(nextExperience);
     const leveledUp = nextLevel > character.level;
-    const levelGain = nextLevel - character.level;
-    const nextMaxHealth = character.maxHealth + levelGain * 10;
-    const nextMaxMana = character.maxMana + levelGain * 5;
+    const nextMaxHealth = getBaseMaximumHealthForLevel(character.characterClass as CharacterClass, nextLevel);
+    const nextMaxMana = getBaseMaximumManaForLevel(character.characterClass as CharacterClass, nextLevel);
 
     const updatedCharacter = await this.prisma.character.update({
       where: {
@@ -439,7 +500,7 @@ export class CharactersService {
     });
 
     return {
-      character: toCharacterSummary(updatedCharacter),
+      character: await this.findByIdForUser(userId, updatedCharacter.id, stance),
       leveledUp
     };
   }
@@ -447,7 +508,8 @@ export class CharactersService {
   async applyDamageToUserCharacter(
     userId: string,
     characterId: string,
-    damage: number
+    damage: number,
+    stance: CombatStance = "balanced"
   ): Promise<CharacterSummary> {
     const character = await this.prisma.character.findFirst({
       where: {
@@ -460,18 +522,166 @@ export class CharactersService {
       throw new NotFoundException("Character not found");
     }
 
-    // Temporary MVP rule: monsters can pressure the player, but player death is
-    // intentionally deferred, so health cannot drop below 1 yet.
     const updatedCharacter = await this.prisma.character.update({
       where: {
         id: character.id
       },
       data: {
-        health: Math.max(1, character.health - damage)
+        health: Math.max(1, character.health - Math.max(0, Math.floor(damage)))
       }
     });
 
-    return toCharacterSummary(updatedCharacter);
+    return this.findByIdForUser(userId, updatedCharacter.id, stance);
+  }
+
+  async regenerateUserCharacter(
+    userId: string,
+    characterId: string,
+    gains: { health: number; mana: number },
+    stance: CombatStance = "balanced"
+  ): Promise<CharacterSummary> {
+    const character = await this.prisma.character.findFirst({
+      where: {
+        id: characterId,
+        userId
+      }
+    });
+
+    if (!character) {
+      throw new NotFoundException("Character not found");
+    }
+
+    const nextHealth = Math.min(character.maxHealth, character.health + Math.max(0, Math.floor(gains.health)));
+    const nextMana = Math.min(character.maxMana, character.mana + Math.max(0, Math.floor(gains.mana)));
+
+    if (nextHealth === character.health && nextMana === character.mana) {
+      return this.findByIdForUser(userId, character.id, stance);
+    }
+
+    await this.prisma.character.update({
+      where: {
+        id: character.id
+      },
+      data: {
+        health: nextHealth,
+        mana: nextMana
+      }
+    });
+
+    return this.findByIdForUser(userId, character.id, stance);
+  }
+
+  async addSkillProgressForUserCharacter(
+    userId: string,
+    characterId: string,
+    skillKey: CharacterSkillKey,
+    gainedPoints: number,
+    stance: CombatStance = "balanced"
+  ): Promise<CharacterSummary> {
+    const normalizedPoints = Math.max(0, Math.floor(gainedPoints));
+
+    if (normalizedPoints === 0) {
+      return this.findByIdForUser(userId, characterId, stance);
+    }
+
+    const character = await this.prisma.character.findFirst({
+      where: {
+        id: characterId,
+        userId
+      }
+    });
+
+    if (!character) {
+      throw new NotFoundException("Character not found");
+    }
+
+    const skillState = this.getSkillStateFields(character, skillKey);
+    const nextSkillState = addSkillProgress(
+      character.characterClass as CharacterClass,
+      skillKey,
+      skillState.level,
+      skillState.progress,
+      normalizedPoints
+    );
+
+    await this.prisma.character.update({
+      where: {
+        id: character.id
+      },
+      data: this.createSkillProgressUpdate(skillKey, nextSkillState.level, nextSkillState.currentPoints)
+    });
+
+    return this.findByIdForUser(userId, character.id, stance);
+  }
+
+  async useItemForUserCharacter(
+    userId: string,
+    characterId: string,
+    itemId: string,
+    stance: CombatStance = "balanced"
+  ): Promise<{ character: CharacterSummary; message: string }> {
+    const character = await this.findCharacterIdentityForUser(userId, characterId);
+
+    const updatedCharacterId = await this.prisma.$transaction(async (tx) => {
+      const ownedItem = await this.getOwnedItem(tx, character.id, itemId);
+      const definition = this.getItemDefinition(ownedItem.itemKey);
+      const foodSeconds = definition.foodSeconds ?? 0;
+
+      if (foodSeconds <= 0) {
+        throw new InventoryValidationError("That item cannot be used.", "item_not_usable");
+      }
+
+      const currentCharacter = await tx.character.findUnique({
+        where: {
+          id: character.id
+        }
+      });
+
+      if (!currentCharacter) {
+        throw new NotFoundException("Character not found");
+      }
+
+      const existingFoodSeconds = currentCharacter.foodExpiresAt
+        ? Math.max(0, Math.ceil((currentCharacter.foodExpiresAt.getTime() - Date.now()) / 1000))
+        : 0;
+
+      if (existingFoodSeconds + foodSeconds > getMaximumFoodSeconds()) {
+        throw new InventoryValidationError("You are full.", "character_full");
+      }
+
+      if (ownedItem.quantity > 1) {
+        await tx.characterItem.update({
+          where: {
+            id: ownedItem.id
+          },
+          data: {
+            quantity: ownedItem.quantity - 1
+          }
+        });
+      } else {
+        await tx.characterItem.delete({
+          where: {
+            id: ownedItem.id
+          }
+        });
+      }
+
+      await tx.character.update({
+        where: {
+          id: currentCharacter.id
+        },
+        data: {
+          foodExpiresAt: new Date(Date.now() + (existingFoodSeconds + foodSeconds) * 1000)
+        }
+      });
+
+      return currentCharacter.id;
+    });
+
+    return {
+      character: await this.findByIdForUser(userId, updatedCharacterId, stance),
+      message: "You eat the meat."
+    };
   }
 
   private async moveItem(
@@ -840,15 +1050,33 @@ export class CharactersService {
     }));
   }
 
+  private toCharacterSummaryWithCombatStats(
+    character: CharacterWithEquipment,
+    stance: CombatStance,
+    now = Date.now()
+  ): CharacterSummary {
+    return toCharacterSummary(character, {
+      equipmentItems: character.items,
+      now,
+      stance
+    });
+  }
+
   private getItemDefinition(itemKey: string): ItemDefinition {
     return (
       itemDefinitions[itemKey] ?? {
+        armor: null,
+        attack: null,
+        defense: null,
+        foodSeconds: null,
         itemKey,
         name: itemKey,
         stackable: false,
         itemType: "creature_part",
         isContainer: false,
-        containerSize: null
+        containerSize: null,
+        shieldDefenseModifier: null,
+        weaponSkill: null
       }
     );
   }
@@ -862,13 +1090,19 @@ export class CharactersService {
 
     return {
       id: item.id,
+      armor: definition.armor,
+      attack: definition.attack,
       itemKey: definition.itemKey,
       name: definition.name,
       stackable: definition.stackable,
+      defense: definition.defense,
+      foodSeconds: definition.foodSeconds,
       itemType: definition.itemType,
       compatibleEquipmentSlots: definition.compatibleEquipmentSlots,
       isContainer: definition.isContainer,
       containerSize: definition.containerSize,
+      shieldDefenseModifier: definition.shieldDefenseModifier,
+      weaponSkill: definition.weaponSkill,
       quantity: item.quantity,
       locationType: item.locationType as InventoryLocation,
       slotIndex: item.slotIndex,
@@ -883,16 +1117,46 @@ export class CharactersService {
     return this.toInventoryItem(item) as InventoryItem;
   }
 
-  private getExperienceRequiredForLevel(level: number): number {
-    if (level === 1) {
-      return 100;
+  private getSkillStateFields(character: Character, skillKey: CharacterSkillKey): { level: number; progress: number } {
+    switch (skillKey) {
+      case "fist":
+        return { level: character.fistLevel, progress: character.fistProgress };
+      case "sword":
+        return { level: character.swordLevel, progress: character.swordProgress };
+      case "axe":
+        return { level: character.axeLevel, progress: character.axeProgress };
+      case "club":
+        return { level: character.clubLevel, progress: character.clubProgress };
+      case "distance":
+        return { level: character.distanceLevel, progress: character.distanceProgress };
+      case "shielding":
+        return { level: character.shieldingLevel, progress: character.shieldingProgress };
+      case "magicLevel":
+        return { level: character.magicLevel, progress: character.magicLevelProgress };
+      case "fishing":
+        return { level: character.fishingLevel, progress: character.fishingProgress };
     }
+  }
 
-    if (level === 2) {
-      return 250;
+  private createSkillProgressUpdate(skillKey: CharacterSkillKey, level: number, progress: number): Prisma.CharacterUpdateInput {
+    switch (skillKey) {
+      case "fist":
+        return { fistLevel: level, fistProgress: progress };
+      case "sword":
+        return { swordLevel: level, swordProgress: progress };
+      case "axe":
+        return { axeLevel: level, axeProgress: progress };
+      case "club":
+        return { clubLevel: level, clubProgress: progress };
+      case "distance":
+        return { distanceLevel: level, distanceProgress: progress };
+      case "shielding":
+        return { shieldingLevel: level, shieldingProgress: progress };
+      case "magicLevel":
+        return { magicLevel: level, magicLevelProgress: progress };
+      case "fishing":
+        return { fishingLevel: level, fishingProgress: progress };
     }
-
-    return level * level * 100;
   }
 
   private async findCharacterIdentityForUser(userId: string, characterId: string): Promise<{ id: string }> {

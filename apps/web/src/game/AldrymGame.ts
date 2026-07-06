@@ -73,6 +73,14 @@ export class AldrymGame {
     this.scene.setGroundItems(groundItems);
   }
 
+  showMonsterDamage(monsterId: string, damage: number): void {
+    this.scene.showMonsterDamage(monsterId, damage);
+  }
+
+  showPlayerDamage(characterId: string, damage: number): void {
+    this.scene.showPlayerDamage(characterId, damage);
+  }
+
   getTilePositionFromClientPoint(clientX: number, clientY: number): Position | null {
     return this.scene.getTilePositionFromClientPoint(clientX, clientY);
   }
