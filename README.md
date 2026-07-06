@@ -84,6 +84,8 @@ corepack pnpm prisma:migrate
 corepack pnpm dev:server
 ```
 
+The development server uses port `41973` by default. If a stale local server is already listening on that port, `dev:server` stops it before starting the new process.
+
 8. Start the web app in another terminal:
 
 ```powershell

@@ -56,6 +56,8 @@ Run the frontend in another terminal:
 corepack pnpm dev:web
 ```
 
+The backend development command uses port `41973` by default. It checks that port before Nest starts and stops stale local listeners automatically, which avoids repeated `EADDRINUSE` failures during development restarts.
+
 ## Quick Start Command Order
 
 ```powershell

@@ -42,6 +42,7 @@ const containerWindowDefaultWidthPx = 224;
 const containerWindowDefaultHeightPx = 214;
 const containerWindowGapPx = 8;
 const containerWorkspaceMinimumHeightPx = 560;
+const corpseLootSlotCount = 4;
 
 type DragItemLocation =
   | { locationType: "root"; slotIndex: number }
@@ -579,6 +580,8 @@ function LootWindow({
     return null;
   }
 
+  const lootSlots = Array.from({ length: corpseLootSlotCount }, (_, slotIndex) => corpse?.items[slotIndex] ?? null);
+
   return (
     <section
       className="loot-window"
@@ -617,9 +620,9 @@ function LootWindow({
       {errorMessage ? <p className="form-message form-message--error">{errorMessage}</p> : null}
 
       {corpse ? (
-        corpse.items.length > 0 ? (
-          <ul className="loot-list">
-            {corpse.items.map((item) => (
+        <ul className="loot-list">
+          {lootSlots.map((item, slotIndex) => (
+            item ? (
               <li
                 className="loot-list__item"
                 draggable
@@ -648,11 +651,15 @@ function LootWindow({
                   <ItemIcon item={item} />
                 </button>
               </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="panel-copy">The corpse is empty.</p>
-        )
+            ) : (
+              <li
+                aria-label="Empty loot slot"
+                className="loot-list__item loot-list__item--empty"
+                key={`empty-loot-${slotIndex}`}
+              />
+            )
+          ))}
+        </ul>
       ) : null}
     </section>
   );
