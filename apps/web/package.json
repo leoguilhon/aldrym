@@ -4,9 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "corepack pnpm --filter @aldrym/shared build",
     "dev": "vite",
+    "prebuild": "corepack pnpm --filter @aldrym/shared build",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "pretypecheck": "corepack pnpm --filter @aldrym/shared build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
