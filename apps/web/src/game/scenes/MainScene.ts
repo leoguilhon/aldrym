@@ -85,6 +85,11 @@ export interface MainSceneOptions {
 }
 
 const CAMERA_ZOOM = 2;
+const ACTOR_NAME_LABEL_COLOR = "#ffffff";
+const ACTOR_NAME_LABEL_STROKE = "#000000";
+const ACTOR_NAME_LABEL_STROKE_THICKNESS = 2;
+const ACTOR_NAME_LABEL_RESOLUTION = 2;
+const ACTOR_NAME_LABEL_FONT_FAMILY = '"Palatino Linotype", "Book Antiqua", Georgia, serif';
 const MONSTER_HEALTH_BAR_WIDTH = 24;
 const MONSTER_HEALTH_BAR_HEIGHT = 4;
 const PLAYER_RESOURCE_BAR_WIDTH = 28;
@@ -1122,13 +1127,7 @@ export class MainScene extends Phaser.Scene {
   private createPlayerView(player: WorldPlayer, x: number, y: number): PlayerView {
     const isLocalPlayer = player.characterId === this.localCharacterId;
     const outfitTextureKey = this.getPlayerOutfitTextureKey(player);
-    const label = this.add.text(0, -32, player.name, {
-      color: "#f2e5c8",
-      fontFamily: "Georgia",
-      fontSize: "11px",
-      stroke: "#120c08",
-      strokeThickness: 3
-    });
+    const label = this.createActorNameLabel(0, -32, player.name, "10px");
     const healthBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -26, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
     const healthBar = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2, -26, PLAYER_RESOURCE_BAR_WIDTH, PLAYER_RESOURCE_BAR_HEIGHT, 0x1fa143, 1);
     const manaBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -21, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
@@ -1136,7 +1135,6 @@ export class MainScene extends Phaser.Scene {
     const shadow = this.add.ellipse(0, 8, 18, 10, 0x000000, 0.28);
     const sprite = this.add.sprite(0, 14, outfitTextureKey, 0);
 
-    label.setOrigin(0.5, 1);
     healthBack.setOrigin(0, 0.5);
     healthBack.setStrokeStyle(1, 0xf0d18c, 0.22);
     healthBar.setOrigin(0, 0.5);
@@ -1528,13 +1526,7 @@ export class MainScene extends Phaser.Scene {
 
   private createMonsterView(monster: WorldMonster, x: number, y: number): MonsterView {
     const metrics = this.getMonsterVisualMetrics(monster.type);
-    const label = this.add.text(0, metrics.labelY, this.getMonsterLabel(monster), {
-      color: "#f2e5c8",
-      fontFamily: "Georgia",
-      fontSize: "10px",
-      stroke: "#120c08",
-      strokeThickness: 3
-    });
+    const label = this.createActorNameLabel(0, metrics.labelY, this.getMonsterLabel(monster), "9px");
     const shadow = this.add.ellipse(0, 8, 18, 9, 0x000000, 0.24);
     const tileMarker = this.add.rectangle(0, 0, this.map.tileSize - 4, this.map.tileSize - 4, 0x000000, 0);
     const sprite = this.add.sprite(0, metrics.spriteY, monsterTextureKeys[monster.type], 0);
@@ -1556,7 +1548,6 @@ export class MainScene extends Phaser.Scene {
     );
     const hitArea = this.add.zone(0, 0, this.map.tileSize, this.map.tileSize);
 
-    label.setOrigin(0.5, 1);
     this.updateMonsterTileMarker(tileMarker, monster);
     sprite.setOrigin(0.5, 1);
     this.updateMonsterSpriteSize(sprite, monster.type);
@@ -1668,6 +1659,27 @@ export class MainScene extends Phaser.Scene {
     }
 
     tileMarker.setStrokeStyle(2, 0xf0d18c, 0.9);
+  }
+
+  private createActorNameLabel(x: number, y: number, value: string, fontSize: string): Phaser.GameObjects.Text {
+    const label = this.add.text(x, y, value, {
+      color: ACTOR_NAME_LABEL_COLOR,
+      fontFamily: ACTOR_NAME_LABEL_FONT_FAMILY,
+      fontSize,
+      fontStyle: "600",
+      padding: {
+        x: 2,
+        y: 1
+      },
+      stroke: ACTOR_NAME_LABEL_STROKE,
+      strokeThickness: ACTOR_NAME_LABEL_STROKE_THICKNESS
+    });
+
+    label.setResolution(ACTOR_NAME_LABEL_RESOLUTION);
+    label.setOrigin(0.5, 1);
+    label.setShadow(0, 2, "rgba(0, 0, 0, 0.35)", 3, true, true);
+
+    return label;
   }
 
   private spawnFloatingDamageText(x: number, y: number, damage: number): void {
