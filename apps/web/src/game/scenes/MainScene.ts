@@ -124,11 +124,18 @@ const outfitTextureKeys = {
 type OutfitTextureKey = (typeof outfitTextureKeys)[keyof typeof outfitTextureKeys];
 const itemTextureKeys = {
   brown_backpack: "item-brown-backpack",
-  chipped_dagger: "item-chipped-dagger",
+  dagger: "item-dagger",
   gold_coin: "item-gold-coin",
+  leather_armor: "item-leather-armor",
+  leather_boots: "item-leather-boots",
+  leather_helmet: "item-leather-helmet",
+  leather_legs: "item-leather-legs",
   meat: "item-meat",
-  patched_tunic: "item-patched-tunic",
-  splintered_shield: "item-splintered-shield"
+  small_axe: "item-small-axe",
+  small_health_potion: "item-small-health-potion",
+  small_mana_potion: "item-small-mana-potion",
+  wooden_club: "item-wooden-club",
+  wooden_shield: "item-wooden-shield"
 } as const;
 const cardinalDirections: CardinalDirection[] = ["south", "north", "east", "west"];
 const pathMoveDirections: MoveDirection[] = ["up-left", "up-right", "down-left", "down-right", "up", "down", "left", "right"];
@@ -217,12 +224,19 @@ export class MainScene extends Phaser.Scene {
       frameHeight: 64,
       frameWidth: 64
     });
-    this.load.image(itemTextureKeys.chipped_dagger, "/assets/items/chipped_dagger.png");
+    this.load.image(itemTextureKeys.dagger, "/assets/items/dagger.png");
     this.load.image(itemTextureKeys.gold_coin, "/assets/items/gold_coin.png");
     this.load.image(itemTextureKeys.brown_backpack, "/assets/items/brown_backpack.png");
+    this.load.image(itemTextureKeys.leather_armor, "/assets/items/leather_armor.png");
+    this.load.image(itemTextureKeys.leather_boots, "/assets/items/leather_boots.png");
+    this.load.image(itemTextureKeys.leather_helmet, "/assets/items/leather_helmet.png");
+    this.load.image(itemTextureKeys.leather_legs, "/assets/items/leather_legs.png");
     this.load.image(itemTextureKeys.meat, "/assets/items/meat.png");
-    this.load.image(itemTextureKeys.patched_tunic, "/assets/items/patched_tunic.png");
-    this.load.image(itemTextureKeys.splintered_shield, "/assets/items/splintered_shield.png");
+    this.load.image(itemTextureKeys.small_axe, "/assets/items/small_axe.png");
+    this.load.image(itemTextureKeys.small_health_potion, "/assets/items/small_health_potion.png");
+    this.load.image(itemTextureKeys.small_mana_potion, "/assets/items/small_mana_potion.png");
+    this.load.image(itemTextureKeys.wooden_club, "/assets/items/wooden_club.png");
+    this.load.image(itemTextureKeys.wooden_shield, "/assets/items/wooden_shield.png");
   }
 
   create(): void {
@@ -1429,7 +1443,22 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
-    if (itemKey === "splintered_shield" || itemKey === "patched_tunic") {
+    if (itemKey === "wooden_shield" || itemKey === "leather_armor") {
+      sprite.setDisplaySize(20, 20);
+      return;
+    }
+
+    if (itemKey === "leather_helmet" || itemKey === "leather_legs" || itemKey === "leather_boots") {
+      sprite.setDisplaySize(19, 19);
+      return;
+    }
+
+    if (itemKey === "small_health_potion" || itemKey === "small_mana_potion") {
+      sprite.setDisplaySize(17, 17);
+      return;
+    }
+
+    if (itemKey === "small_axe" || itemKey === "wooden_club") {
       sprite.setDisplaySize(20, 20);
       return;
     }

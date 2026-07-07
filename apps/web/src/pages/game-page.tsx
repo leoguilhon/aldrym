@@ -30,6 +30,7 @@ import {
   createLocalMap,
   equipmentSlots,
   getRemainingFoodSeconds,
+  isItemUsable,
   resolveLocalPlayerSpawn,
   worldEventNames
 } from "@aldrym/shared";
@@ -730,16 +731,30 @@ function getItemIconPath(itemKey: string): string {
   switch (itemKey) {
     case "brown_backpack":
       return "/assets/items/brown_backpack.png";
-    case "chipped_dagger":
-      return "/assets/items/chipped_dagger.png";
+    case "dagger":
+      return "/assets/items/dagger.png";
     case "gold_coin":
       return "/assets/items/gold_coin.png";
+    case "leather_armor":
+      return "/assets/items/leather_armor.png";
+    case "leather_boots":
+      return "/assets/items/leather_boots.png";
+    case "leather_helmet":
+      return "/assets/items/leather_helmet.png";
+    case "leather_legs":
+      return "/assets/items/leather_legs.png";
     case "meat":
       return "/assets/items/meat.png";
-    case "patched_tunic":
-      return "/assets/items/patched_tunic.png";
-    case "splintered_shield":
-      return "/assets/items/splintered_shield.png";
+    case "small_axe":
+      return "/assets/items/small_axe.png";
+    case "small_health_potion":
+      return "/assets/items/small_health_potion.png";
+    case "small_mana_potion":
+      return "/assets/items/small_mana_potion.png";
+    case "wooden_club":
+      return "/assets/items/wooden_club.png";
+    case "wooden_shield":
+      return "/assets/items/wooden_shield.png";
     default:
       return "/assets/items/gold_coin.png";
   }
@@ -752,8 +767,10 @@ function getItemTooltip(
     | "attack"
     | "defense"
     | "foodSeconds"
+    | "healthRestore"
     | "itemKey"
     | "itemType"
+    | "manaRestore"
     | "name"
     | "quantity"
     | "stackable"
@@ -783,6 +800,14 @@ function getItemTooltip(
 
   if (item.foodSeconds) {
     lines.push(`Food: ${item.foodSeconds}s`);
+  }
+
+  if (item.healthRestore) {
+    lines.push(`Health: +${item.healthRestore}`);
+  }
+
+  if (item.manaRestore) {
+    lines.push(`Mana: +${item.manaRestore}`);
   }
 
   return lines.join("\n");
@@ -919,7 +944,7 @@ function ItemSlot({
 
         event.preventDefault();
 
-        if (item.foodSeconds) {
+        if (isItemUsable(item)) {
           onUseItem(item.id);
           return;
         }

@@ -47,7 +47,7 @@ This document defines the multiplayer world events used by the browser client an
 - `inventory:use-item`
   - Payload: `InventoryUseItemRequest`
   - Shape: `{ itemId: string }`
-  - Purpose: Request using an owned item instance. The current use flow covers edible items such as meat and applies the authoritative food timer on the server.
+  - Purpose: Request using an owned item instance. The current use flow covers food such as meat and restorative consumables such as health and mana potions through authoritative server-side validation.
 - `ground-item:take`
   - Payload: `GroundItemTakeRequest`
   - Shape: `{ groundItemId: string; target?: InventoryMoveTarget }`

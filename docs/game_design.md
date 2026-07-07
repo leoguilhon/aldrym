@@ -26,7 +26,7 @@ The current playable scope is a server-authoritative PvE vertical slice on the l
 - Offensive, balanced, and defensive fight stances modify the authoritative attack and defense output
 - Equipped items contribute combat values through `attack`, `defense`, shield modifiers, and armor
 - Monsters follow the nearest player within 8 SQM and remain still when no player is close enough
-- The current troll retreats at low health, respawns after 30 seconds, and can drop gold, meat, or a chipped dagger
+- The current troll retreats at low health, respawns after 30 seconds, and can drop gold, meat, or a dagger
 - Alive monsters occupy their tile and cannot be walked through by players
 - Defeated monsters grant experience to the attacking character, leave a corpse on the map, show a respawn warning shortly before returning, and respawn at their original spawn position after a short delay
 - Monster corpses have 8 slots; stackable items can still merge into an existing matching stack
@@ -38,6 +38,7 @@ The current playable scope is a server-authoritative PvE vertical slice on the l
 - Characters have persisted equipment slots for head, body, legs, weapon, shield, feet, and backpack.
 - A basic backpack is an equippable 20-slot container. Backpack items can hold items and other backpacks when server-side nesting validation allows it.
 - Meat can be used by right-clicking it. Each use adds 180 seconds of food, up to a 1,200-second cap, and fed characters regenerate health and mana over time.
+- Small health potions and small mana potions can be used by right-clicking them. They restore a modest amount of health or mana through an authoritative server-side use flow.
 - Monster and player hits show red floating damage numbers in the viewport, while the sidebar health and mana bars mirror the authoritative character state.
 - The game screen uses a more complete MMORPG-style client composition with a central Phaser viewport, right-side character/inventory/status panels, equipment slots, backpack windows, and a small loot window
 - Character resources use the current Tibia-inspired rookie-to-class progression model, adapted to Aldrym starting classes at level 1 instead of changing vocation later

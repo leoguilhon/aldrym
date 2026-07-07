@@ -90,6 +90,8 @@ export interface ItemCombatStats {
   attack: number | null;
   defense: number | null;
   foodSeconds: number | null;
+  healthRestore: number | null;
+  manaRestore: number | null;
   shieldDefenseModifier: number | null;
   weaponSkill: WeaponCombatSkill | null;
 }
@@ -628,12 +630,18 @@ export interface ItemDefinition {
   stackable: boolean;
   defense: number | null;
   foodSeconds: number | null;
+  healthRestore: number | null;
+  manaRestore: number | null;
   itemType: ItemType;
   compatibleEquipmentSlots?: EquipmentSlot[];
   isContainer: boolean;
   containerSize: number | null;
   shieldDefenseModifier: number | null;
   weaponSkill: WeaponCombatSkill | null;
+}
+
+export function isItemUsable(item: Pick<ItemDefinition, "foodSeconds" | "healthRestore" | "manaRestore"> | null | undefined): boolean {
+  return Math.max(0, item?.foodSeconds ?? 0, item?.healthRestore ?? 0, item?.manaRestore ?? 0) > 0;
 }
 
 export const itemDefinitions: Record<string, ItemDefinition> = {
@@ -643,28 +651,66 @@ export const itemDefinitions: Record<string, ItemDefinition> = {
     containerSize: null,
     defense: null,
     foodSeconds: null,
+    healthRestore: null,
     isContainer: false,
     itemKey: "gold_coin",
     itemType: "currency",
+    manaRestore: null,
     name: "Gold Coin",
     shieldDefenseModifier: null,
     stackable: true,
     weaponSkill: null
   },
-  chipped_dagger: {
+  dagger: {
     armor: null,
     attack: 10,
     compatibleEquipmentSlots: ["weapon"],
     containerSize: null,
     defense: 6,
     foodSeconds: null,
+    healthRestore: null,
     isContainer: false,
-    itemKey: "chipped_dagger",
+    itemKey: "dagger",
     itemType: "weapon",
-    name: "Chipped Dagger",
+    manaRestore: null,
+    name: "Dagger",
     shieldDefenseModifier: 0,
     stackable: false,
     weaponSkill: "sword"
+  },
+  small_axe: {
+    armor: null,
+    attack: 10,
+    compatibleEquipmentSlots: ["weapon"],
+    containerSize: null,
+    defense: 5,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "small_axe",
+    itemType: "weapon",
+    manaRestore: null,
+    name: "Small Axe",
+    shieldDefenseModifier: 0,
+    stackable: false,
+    weaponSkill: "axe"
+  },
+  wooden_club: {
+    armor: null,
+    attack: 10,
+    compatibleEquipmentSlots: ["weapon"],
+    containerSize: null,
+    defense: 5,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "wooden_club",
+    itemType: "weapon",
+    manaRestore: null,
+    name: "Wooden Club",
+    shieldDefenseModifier: 0,
+    stackable: false,
+    weaponSkill: "club"
   },
   brown_backpack: {
     armor: null,
@@ -673,40 +719,97 @@ export const itemDefinitions: Record<string, ItemDefinition> = {
     containerSize: 20,
     defense: null,
     foodSeconds: null,
+    healthRestore: null,
     isContainer: true,
     itemKey: "brown_backpack",
     itemType: "container",
+    manaRestore: null,
     name: "Brown Backpack",
     shieldDefenseModifier: null,
     stackable: false,
     weaponSkill: null
   },
-  splintered_shield: {
+  wooden_shield: {
     armor: null,
     attack: null,
     compatibleEquipmentSlots: ["shield"],
     containerSize: null,
     defense: 11,
     foodSeconds: null,
+    healthRestore: null,
     isContainer: false,
-    itemKey: "splintered_shield",
+    itemKey: "wooden_shield",
     itemType: "shield",
-    name: "Splintered Shield",
+    manaRestore: null,
+    name: "Wooden Shield",
     shieldDefenseModifier: null,
     stackable: false,
     weaponSkill: null
   },
-  patched_tunic: {
+  leather_armor: {
     armor: 3,
     attack: null,
     compatibleEquipmentSlots: ["body"],
     containerSize: null,
     defense: null,
     foodSeconds: null,
+    healthRestore: null,
     isContainer: false,
-    itemKey: "patched_tunic",
+    itemKey: "leather_armor",
     itemType: "armor",
-    name: "Patched Tunic",
+    manaRestore: null,
+    name: "Leather Armor",
+    shieldDefenseModifier: null,
+    stackable: false,
+    weaponSkill: null
+  },
+  leather_helmet: {
+    armor: 1,
+    attack: null,
+    compatibleEquipmentSlots: ["head"],
+    containerSize: null,
+    defense: null,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "leather_helmet",
+    itemType: "armor",
+    manaRestore: null,
+    name: "Leather Helmet",
+    shieldDefenseModifier: null,
+    stackable: false,
+    weaponSkill: null
+  },
+  leather_legs: {
+    armor: 2,
+    attack: null,
+    compatibleEquipmentSlots: ["legs"],
+    containerSize: null,
+    defense: null,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "leather_legs",
+    itemType: "armor",
+    manaRestore: null,
+    name: "Leather Legs",
+    shieldDefenseModifier: null,
+    stackable: false,
+    weaponSkill: null
+  },
+  leather_boots: {
+    armor: 1,
+    attack: null,
+    compatibleEquipmentSlots: ["feet"],
+    containerSize: null,
+    defense: null,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "leather_boots",
+    itemType: "armor",
+    manaRestore: null,
+    name: "Leather Boots",
     shieldDefenseModifier: null,
     stackable: false,
     weaponSkill: null
@@ -717,10 +820,44 @@ export const itemDefinitions: Record<string, ItemDefinition> = {
     containerSize: null,
     defense: null,
     foodSeconds: 180,
+    healthRestore: null,
     isContainer: false,
     itemKey: "meat",
     itemType: "consumable",
+    manaRestore: null,
     name: "Meat",
+    shieldDefenseModifier: null,
+    stackable: true,
+    weaponSkill: null
+  },
+  small_health_potion: {
+    armor: null,
+    attack: null,
+    containerSize: null,
+    defense: null,
+    foodSeconds: null,
+    healthRestore: 30,
+    isContainer: false,
+    itemKey: "small_health_potion",
+    itemType: "consumable",
+    manaRestore: null,
+    name: "Small Health Potion",
+    shieldDefenseModifier: null,
+    stackable: true,
+    weaponSkill: null
+  },
+  small_mana_potion: {
+    armor: null,
+    attack: null,
+    containerSize: null,
+    defense: null,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "small_mana_potion",
+    itemType: "consumable",
+    manaRestore: 20,
+    name: "Small Mana Potion",
     shieldDefenseModifier: null,
     stackable: true,
     weaponSkill: null

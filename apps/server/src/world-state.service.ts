@@ -61,7 +61,7 @@ const lootTables: Record<MonsterType, LootTableEntry[]> = {
   troll: [
     { itemKey: "gold_coin", minimumQuantity: 1, maximumQuantity: 6, dropChance: 0.65 },
     { itemKey: "meat", minimumQuantity: 1, maximumQuantity: 1, dropChance: 0.152 },
-    { itemKey: "chipped_dagger", minimumQuantity: 1, maximumQuantity: 1, dropChance: 0.18 }
+    { itemKey: "dagger", minimumQuantity: 1, maximumQuantity: 1, dropChance: 0.18 }
   ]
 };
 

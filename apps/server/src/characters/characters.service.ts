@@ -19,6 +19,7 @@ import {
   getBaseMaximumManaForLevel,
   getLevelFromExperience,
   getMaximumFoodSeconds,
+  isItemUsable,
   itemDefinitions
 } from "@aldrym/shared";
 import { ConflictException, Inject, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
@@ -84,35 +85,54 @@ export class CharactersService {
           }
         });
 
+        const equippedBackpack = await tx.characterItem.create({
+          data: {
+            characterId: createdCharacter.id,
+            itemKey: "brown_backpack",
+            quantity: 1,
+            locationType: EQUIPMENT_LOCATION,
+            equipmentSlot: "backpack"
+          }
+        });
+
         await tx.characterItem.createMany({
           data: [
             {
               characterId: createdCharacter.id,
-              itemKey: "brown_backpack",
-              quantity: 1,
-              locationType: EQUIPMENT_LOCATION,
-              equipmentSlot: "backpack"
-            },
-            {
-              characterId: createdCharacter.id,
-              itemKey: "chipped_dagger",
+              itemKey: "dagger",
               quantity: 1,
               locationType: EQUIPMENT_LOCATION,
               equipmentSlot: "weapon"
             },
             {
               characterId: createdCharacter.id,
-              itemKey: "patched_tunic",
+              itemKey: "leather_armor",
               quantity: 1,
               locationType: EQUIPMENT_LOCATION,
               equipmentSlot: "body"
             },
             {
               characterId: createdCharacter.id,
-              itemKey: "splintered_shield",
+              itemKey: "wooden_shield",
               quantity: 1,
               locationType: EQUIPMENT_LOCATION,
               equipmentSlot: "shield"
+            },
+            {
+              characterId: createdCharacter.id,
+              itemKey: "small_health_potion",
+              quantity: 5,
+              locationType: CONTAINER_LOCATION,
+              containerItemId: equippedBackpack.id,
+              slotIndex: 0
+            },
+            {
+              characterId: createdCharacter.id,
+              itemKey: "small_mana_potion",
+              quantity: 5,
+              locationType: CONTAINER_LOCATION,
+              containerItemId: equippedBackpack.id,
+              slotIndex: 1
             }
           ]
         });
@@ -622,12 +642,14 @@ export class CharactersService {
   ): Promise<{ character: CharacterSummary; message: string }> {
     const character = await this.findCharacterIdentityForUser(userId, characterId);
 
-    const updatedCharacterId = await this.prisma.$transaction(async (tx) => {
+    const useResult = await this.prisma.$transaction(async (tx) => {
       const ownedItem = await this.getOwnedItem(tx, character.id, itemId);
       const definition = this.getItemDefinition(ownedItem.itemKey);
       const foodSeconds = definition.foodSeconds ?? 0;
+      const healthRestore = Math.max(0, definition.healthRestore ?? 0);
+      const manaRestore = Math.max(0, definition.manaRestore ?? 0);
 
-      if (foodSeconds <= 0) {
+      if (!isItemUsable(definition)) {
         throw new InventoryValidationError("That item cannot be used.", "item_not_usable");
       }
 
@@ -645,8 +667,27 @@ export class CharactersService {
         ? Math.max(0, Math.ceil((currentCharacter.foodExpiresAt.getTime() - Date.now()) / 1000))
         : 0;
 
-      if (existingFoodSeconds + foodSeconds > getMaximumFoodSeconds()) {
+      if (foodSeconds > 0 && existingFoodSeconds + foodSeconds > getMaximumFoodSeconds()) {
         throw new InventoryValidationError("You are full.", "character_full");
+      }
+
+      const nextHealth = Math.min(currentCharacter.maxHealth, currentCharacter.health + healthRestore);
+      const nextMana = Math.min(currentCharacter.maxMana, currentCharacter.mana + manaRestore);
+      const healthGain = nextHealth - currentCharacter.health;
+      const manaGain = nextMana - currentCharacter.mana;
+
+      if (foodSeconds <= 0 && healthGain <= 0 && manaGain <= 0) {
+        if (healthRestore > 0 && manaRestore > 0) {
+          throw new InventoryValidationError("Your health and mana are already full.", "resource_full");
+        }
+
+        if (healthRestore > 0) {
+          throw new InventoryValidationError("Your health is already full.", "health_full");
+        }
+
+        if (manaRestore > 0) {
+          throw new InventoryValidationError("Your mana is already full.", "mana_full");
+        }
       }
 
       if (ownedItem.quantity > 1) {
@@ -666,21 +707,29 @@ export class CharactersService {
         });
       }
 
+      const nextFoodExpiresAt =
+        foodSeconds > 0 ? new Date(Date.now() + (existingFoodSeconds + foodSeconds) * 1000) : currentCharacter.foodExpiresAt;
+
       await tx.character.update({
         where: {
           id: currentCharacter.id
         },
         data: {
-          foodExpiresAt: new Date(Date.now() + (existingFoodSeconds + foodSeconds) * 1000)
+          foodExpiresAt: nextFoodExpiresAt,
+          health: nextHealth,
+          mana: nextMana
         }
       });
 
-      return currentCharacter.id;
+      return {
+        characterId: currentCharacter.id,
+        message: `${foodSeconds > 0 ? "You eat" : "You drink"} the ${definition.name.toLowerCase()}.`
+      };
     });
 
     return {
-      character: await this.findByIdForUser(userId, updatedCharacterId, stance),
-      message: "You eat the meat."
+      character: await this.findByIdForUser(userId, useResult.characterId, stance),
+      message: useResult.message
     };
   }
 
@@ -1069,12 +1118,14 @@ export class CharactersService {
         attack: null,
         defense: null,
         foodSeconds: null,
+        healthRestore: null,
         itemKey,
         name: itemKey,
         stackable: false,
         itemType: "creature_part",
         isContainer: false,
         containerSize: null,
+        manaRestore: null,
         shieldDefenseModifier: null,
         weaponSkill: null
       }
@@ -1097,10 +1148,12 @@ export class CharactersService {
       stackable: definition.stackable,
       defense: definition.defense,
       foodSeconds: definition.foodSeconds,
+      healthRestore: definition.healthRestore,
       itemType: definition.itemType,
       compatibleEquipmentSlots: definition.compatibleEquipmentSlots,
       isContainer: definition.isContainer,
       containerSize: definition.containerSize,
+      manaRestore: definition.manaRestore,
       shieldDefenseModifier: definition.shieldDefenseModifier,
       weaponSkill: definition.weaponSkill,
       quantity: item.quantity,
