@@ -90,6 +90,8 @@ const ACTOR_NAME_LABEL_STROKE = "#000000";
 const ACTOR_NAME_LABEL_STROKE_THICKNESS = 2;
 const ACTOR_NAME_LABEL_RESOLUTION = 2;
 const ACTOR_NAME_LABEL_FONT_FAMILY = '"Palatino Linotype", "Book Antiqua", Georgia, serif';
+const PLAYER_NAME_LABEL_DEPTH = 90;
+const PLAYER_NAME_LABEL_OFFSET_Y = -29;
 const MONSTER_HEALTH_BAR_WIDTH = 24;
 const MONSTER_HEALTH_BAR_HEIGHT = 4;
 const PLAYER_RESOURCE_BAR_WIDTH = 28;
@@ -1030,6 +1032,7 @@ export class MainScene extends Phaser.Scene {
     for (const [characterId, view] of this.playerViews.entries()) {
       if (!activeCharacterIds.has(characterId)) {
         view.container.destroy(true);
+        view.label.destroy();
         this.playerViews.delete(characterId);
       }
     }
@@ -1105,6 +1108,7 @@ export class MainScene extends Phaser.Scene {
     existingView.label.setText(player.name);
     this.updatePlayerResourceBars(existingView, player);
     this.tweens.killTweensOf(existingView.container);
+    this.tweens.killTweensOf(existingView.label);
     const nextDirection = this.inferFacingDirection(existingView.container, { x, y }, existingView.facing);
     const isMoving = existingView.container.x !== x || existingView.container.y !== y;
     existingView.facing = nextDirection;
@@ -1116,6 +1120,7 @@ export class MainScene extends Phaser.Scene {
     }
 
     if (!isMoving) {
+      existingView.label.setPosition(x, y + PLAYER_NAME_LABEL_OFFSET_Y);
       this.playDirectionalAnimation(existingView.sprite, existingView.outfitTextureKey, existingView.facing, "idle");
       return;
     }
@@ -1126,22 +1131,30 @@ export class MainScene extends Phaser.Scene {
       existingView.facing,
       this.takeNextWalkAnimationState(existingView)
     );
+    const movementDuration = getMovementTweenDurationMs(player.level, this.inferTweenMoveDirection(existingView.container, { x, y }));
     this.tweens.add({
       targets: existingView.container,
       x,
       y,
-      duration: getMovementTweenDurationMs(player.level, this.inferTweenMoveDirection(existingView.container, { x, y })),
+      duration: movementDuration,
       ease: "Linear",
       onComplete: () => {
         this.playDirectionalAnimation(existingView.sprite, existingView.outfitTextureKey, existingView.facing, "idle");
       }
+    });
+    this.tweens.add({
+      targets: existingView.label,
+      x,
+      y: y + PLAYER_NAME_LABEL_OFFSET_Y,
+      duration: movementDuration,
+      ease: "Linear"
     });
   }
 
   private createPlayerView(player: WorldPlayer, x: number, y: number): PlayerView {
     const isLocalPlayer = player.characterId === this.localCharacterId;
     const outfitTextureKey = this.getPlayerOutfitTextureKey(player);
-    const label = this.createActorNameLabel(0, -29, player.name, "9px");
+    const label = this.createActorNameLabel(x, y + PLAYER_NAME_LABEL_OFFSET_Y, player.name, "9px");
     const healthBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -26, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
     const healthBar = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2, -26, PLAYER_RESOURCE_BAR_WIDTH, PLAYER_RESOURCE_BAR_HEIGHT, 0x1fa143, 1);
     const manaBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -21, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
@@ -1160,7 +1173,7 @@ export class MainScene extends Phaser.Scene {
     this.playDirectionalAnimation(sprite, outfitTextureKey, "south", "idle");
     const view = {
       facing: "south" as CardinalDirection,
-      container: this.add.container(x, y, [shadow, sprite, healthBack, healthBar, manaBack, manaBar, label]),
+      container: this.add.container(x, y, [shadow, sprite, healthBack, healthBar, manaBack, manaBar]),
       healthBack,
       healthBar,
       label,
@@ -1173,6 +1186,7 @@ export class MainScene extends Phaser.Scene {
     };
 
     view.container.setDepth(isLocalPlayer ? 20 : 16);
+    label.setDepth(PLAYER_NAME_LABEL_DEPTH);
     this.updatePlayerResourceBars(view, player);
 
     return view;
