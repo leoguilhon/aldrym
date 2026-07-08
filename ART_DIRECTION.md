@@ -395,7 +395,38 @@ Even if the art is generated as a standalone image, it should still feel like it
 
 ---
 
-## 15. Background Rule
+## 15. Item Icon Quality
+
+Inventory item icons must match the quality bar of the current strongest item assets, especially:
+
+- `apps/web/public/assets/items/leather_armor.png`
+- `apps/web/public/assets/items/dagger.png`
+
+Use these assets as visual references before accepting or committing any new item icon.
+
+Required item icon traits:
+
+- final asset size must be 32x32 PNG with transparent background
+- strong dark outline and clear silhouette
+- dense hand-pixeled texture, not smooth procedural shapes
+- visible material identity through pixel clusters, scuffs, highlights, seams, chips, grain, glass reflections, or metal shine
+- compact inventory composition that fills the icon space similarly to `leather_armor.png` and `dagger.png`
+- readable at native 32x32 size and still attractive when previewed larger
+- consistent contrast, lighting direction, and old-school MMORPG item language
+
+Reject item icons that look:
+
+- flat, vector-like, or made from simple geometric primitives
+- too clean, sparse, or low-detail compared to `leather_armor.png` and `dagger.png`
+- blurry, painterly, realistic, glossy, or modern mobile-game styled
+- undersized inside the 32x32 canvas
+- visually disconnected from the existing item set
+
+When generating new item icons, first generate at high quality, then remove the background, crop to the non-transparent subject, and downscale carefully to 32x32. Always inspect the result next to `leather_armor.png` and `dagger.png` before considering it done.
+
+---
+
+## 16. Background Rule
 
 For isolated assets, prefer:
 
@@ -418,7 +449,7 @@ A full environment background is expected.
 
 ---
 
-## 16. Originality Rule
+## 17. Originality Rule
 
 All generated art must be original.
 
@@ -442,7 +473,7 @@ The style may be strongly inspired, but the assets must remain original.
 
 ---
 
-## 17. Negative Style Rules
+## 18. Negative Style Rules
 
 Do not generate assets that look:
 
@@ -458,7 +489,7 @@ Do not generate assets that look:
 
 ---
 
-## 18. Default Prompt Base
+## 19. Default Prompt Base
 
 Use this prompt base for most generations:
 
@@ -469,7 +500,7 @@ Keep the design original. Do not make it painterly, realistic, blurry, glossy, o
 
 ---
 
-## 19. Final Rule
+## 20. Final Rule
 
 Whenever a decision must be made, always choose the option that best preserves:
 

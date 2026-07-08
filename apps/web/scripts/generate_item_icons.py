@@ -87,6 +87,15 @@ def copy_icon(source_name: str, target_name: str) -> None:
     print(f"Copied apps/web/public/assets/items/{source_name} -> {target_name}")
 
 
+def keep_icon(name: str) -> None:
+    target_path = ITEMS_DIR / name
+
+    if not target_path.exists():
+        raise FileNotFoundError(target_path)
+
+    print(f"Kept existing apps/web/public/assets/items/{name}")
+
+
 def add_shadow(item: Image.Image) -> Image.Image:
     alpha = item.getchannel("A").filter(ImageFilter.GaussianBlur(hd(0.42)))
     shifted = Image.new("L", item.size, 0)
@@ -237,13 +246,13 @@ def main() -> None:
     copy_icon("patched_tunic.png", "leather_armor.png")
     copy_icon("splintered_shield.png", "wooden_shield.png")
 
-    save_image(draw_leather_helmet(), "leather_helmet.png")
-    save_image(draw_leather_legs(), "leather_legs.png")
-    save_image(draw_leather_boots(), "leather_boots.png")
-    save_image(draw_small_axe(), "small_axe.png")
-    save_image(draw_wooden_club(), "wooden_club.png")
-    save_image(draw_potion(RED_DEEP, RED_DARK, RED_MID, RED_LIGHT), "small_health_potion.png")
-    save_image(draw_potion(BLUE_DEEP, BLUE_DARK, BLUE_MID, BLUE_LIGHT), "small_mana_potion.png")
+    keep_icon("leather_helmet.png")
+    keep_icon("leather_legs.png")
+    keep_icon("leather_boots.png")
+    keep_icon("small_axe.png")
+    keep_icon("wooden_club.png")
+    keep_icon("small_health_potion.png")
+    keep_icon("small_mana_potion.png")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ SET "itemKey" = CASE
 END
 WHERE "itemKey" IN ('chipped_dagger', 'patched_tunic', 'splintered_shield');
 
-WITH "MannyKnight" AS (
+WITH "TargetCharacter" AS (
   SELECT "id"
   FROM "Character"
   WHERE "name" = 'Manny Knight'
@@ -17,8 +17,8 @@ WITH "MannyKnight" AS (
     "CharacterItem"."id",
     "CharacterItem"."characterId"
   FROM "CharacterItem"
-  INNER JOIN "MannyKnight"
-    ON "MannyKnight"."id" = "CharacterItem"."characterId"
+  INNER JOIN "TargetCharacter"
+    ON "TargetCharacter"."id" = "CharacterItem"."characterId"
   WHERE "CharacterItem"."locationType" = 'equipment'
     AND "CharacterItem"."equipmentSlot" = 'backpack'
   ORDER BY "CharacterItem"."createdAt" ASC, "CharacterItem"."id" ASC
@@ -28,21 +28,21 @@ WITH "MannyKnight" AS (
   INSERT INTO "CharacterItem" ("id", "characterId", "itemKey", "quantity", "locationType", "equipmentSlot", "createdAt", "updatedAt")
   SELECT
     md5(random()::text || clock_timestamp()::text),
-    "MannyKnight"."id",
+    "TargetCharacter"."id",
     'brown_backpack',
     1,
     'equipment',
     'backpack',
     CURRENT_TIMESTAMP,
     CURRENT_TIMESTAMP
-  FROM "MannyKnight"
+  FROM "TargetCharacter"
   WHERE NOT EXISTS (
     SELECT 1
     FROM "ExistingBackpack"
   )
   RETURNING "id", "characterId"
 ),
-"MannyBackpack" AS (
+"TargetBackpack" AS (
   SELECT "id", "characterId"
   FROM "ExistingBackpack"
   UNION ALL
@@ -50,11 +50,11 @@ WITH "MannyKnight" AS (
   FROM "CreatedBackpack"
 )
 DELETE FROM "CharacterItem"
-USING "MannyBackpack"
-WHERE "CharacterItem"."characterId" = "MannyBackpack"."characterId"
+USING "TargetBackpack"
+WHERE "CharacterItem"."characterId" = "TargetBackpack"."characterId"
   AND "CharacterItem"."locationType" = 'container';
 
-WITH "MannyKnight" AS (
+WITH "TargetCharacter" AS (
   SELECT "id"
   FROM "Character"
   WHERE "name" = 'Manny Knight'
@@ -64,8 +64,8 @@ WITH "MannyKnight" AS (
     "CharacterItem"."id",
     "CharacterItem"."characterId"
   FROM "CharacterItem"
-  INNER JOIN "MannyKnight"
-    ON "MannyKnight"."id" = "CharacterItem"."characterId"
+  INNER JOIN "TargetCharacter"
+    ON "TargetCharacter"."id" = "CharacterItem"."characterId"
   WHERE "CharacterItem"."locationType" = 'equipment'
     AND "CharacterItem"."equipmentSlot" = 'backpack'
   ORDER BY "CharacterItem"."createdAt" ASC, "CharacterItem"."id" ASC

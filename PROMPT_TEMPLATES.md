@@ -119,19 +119,22 @@ Create an original 2D pixel art tree asset for a classic top-down fantasy MMORPG
 ## 8. Item Templates
 
 ### 8.1 Generic Item
-Create an original 2D pixel art item icon for a classic top-down fantasy MMORPG. The item should be small, readable, visually distinct, and suitable for game inventory or world drop use. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
+Create an original 2D pixel art item icon for a classic top-down fantasy MMORPG. The item should be small, readable, visually distinct, and suitable for game inventory or world drop use. Match the visual quality, density, scale, lighting, contrast, and pixel-cluster detail of Aldrym's strongest existing item icons, especially `leather_armor.png` and `dagger.png`. Use a dark crisp outline, dense hand-pixeled texture, visible material details, and a compact inventory composition that fills the 32x32 icon space. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
 
 ### 8.2 Sword
-Create an original 2D pixel art sword item icon for a classic top-down fantasy MMORPG. The item should be small, readable, and visually distinct, with clear weapon identity and strong silhouette. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
+Create an original 2D pixel art sword item icon for a classic top-down fantasy MMORPG. The item should be small, readable, and visually distinct, with clear weapon identity and strong silhouette. Match the visual quality, density, scale, lighting, contrast, and pixel-cluster detail of Aldrym's strongest existing item icons, especially `leather_armor.png` and `dagger.png`. Use hand-pixeled metal highlights, a dark crisp outline, and compact inventory composition. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
 
 ### 8.3 Staff
-Create an original 2D pixel art magic staff item icon for a classic top-down fantasy MMORPG. The item should be small, readable, and visually distinct, with clear magical identity. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
+Create an original 2D pixel art magic staff item icon for a classic top-down fantasy MMORPG. The item should be small, readable, and visually distinct, with clear magical identity. Match the visual quality, density, scale, lighting, contrast, and pixel-cluster detail of Aldrym's strongest existing item icons, especially `leather_armor.png` and `dagger.png`. Use hand-pixeled wood or metal texture, controlled magical highlights, a dark crisp outline, and compact inventory composition. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
 
 ### 8.4 Bow
-Create an original 2D pixel art bow item icon for a classic top-down fantasy MMORPG. The item should be small, readable, and visually distinct, with clear ranged-weapon identity. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
+Create an original 2D pixel art bow item icon for a classic top-down fantasy MMORPG. The item should be small, readable, and visually distinct, with clear ranged-weapon identity. Match the visual quality, density, scale, lighting, contrast, and pixel-cluster detail of Aldrym's strongest existing item icons, especially `leather_armor.png` and `dagger.png`. Use hand-pixeled wood grain, string readability, a dark crisp outline, and compact inventory composition. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
 
 ### 8.5 Potion
-Create an original 2D pixel art potion item icon for a classic top-down fantasy MMORPG. The item should be small, readable, and visually distinct, suitable for inventory or loot representation. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
+Create an original 2D pixel art potion item icon for a classic top-down fantasy MMORPG. The item should be small, readable, and visually distinct, suitable for inventory or loot representation. Match the visual quality, density, scale, lighting, contrast, and pixel-cluster detail of Aldrym's strongest existing item icons, especially `leather_armor.png` and `dagger.png`. Use hand-pixeled glass reflections, liquid depth, a dark crisp outline, and compact inventory composition. The art should evoke an old-school Tibia-style MMORPG feel while remaining original.
+
+### 8.6 Item Quality Gate
+Before accepting any item icon, compare it directly against `apps/web/public/assets/items/leather_armor.png` and `apps/web/public/assets/items/dagger.png`. Reject the result if it looks flat, vector-like, geometric, sparse, blurry, undersized, or less detailed than those references. Final item icons must be 32x32 PNGs with transparent backgrounds, dense pixel texture, strong silhouette, and material-specific highlights.
 
 ---
 
@@ -182,6 +185,8 @@ Add this when generating new assets for an existing set:
 
 Keep the same pixel art language, scale logic, top-down readability, and overall visual identity as the previously generated Aldrym assets.
 
+For item icons, specifically match the visual quality bar of `leather_armor.png` and `dagger.png`: dense hand-pixeled texture, dark crisp outline, rich material detail, compact 32x32 inventory scale, and no smooth vector-like shapes.
+
 ---
 
 ## 13. Class Identity Add-on
@@ -205,6 +210,8 @@ The asset should look game-ready and suitable for direct use in a tile-based bro
 Use this when needed to reinforce the style:
 
 Do not create painterly concept art, realistic rendering, 3D visuals, blurry textures, glossy mobile-game style, or oversized exaggerated cartoon proportions.
+
+For item icons, also avoid smooth procedural shapes, flat vector-like icons, sparse low-detail drawings, oversized empty padding, and any result that looks lower quality than `leather_armor.png` or `dagger.png`.
 
 ---
 

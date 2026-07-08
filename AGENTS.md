@@ -52,3 +52,5 @@ All generated assets must preserve:
 - a visual feel strongly inspired by classic Tibia-style gameplay
 
 Do not generate assets in styles that are realistic, painterly, 3D, glossy, overly cartoonish, or inconsistent with the established visual direction.
+
+For generated item icons, use `apps/web/public/assets/items/leather_armor.png` and `apps/web/public/assets/items/dagger.png` as the minimum quality benchmark. New item icons must match their dense hand-pixeled texture, dark outline, compact 32x32 inventory scale, material detail, and overall polish. Reject flat, vector-like, geometric, sparse, blurry, or undersized item results before committing them.
