@@ -1141,7 +1141,7 @@ export class MainScene extends Phaser.Scene {
   private createPlayerView(player: WorldPlayer, x: number, y: number): PlayerView {
     const isLocalPlayer = player.characterId === this.localCharacterId;
     const outfitTextureKey = this.getPlayerOutfitTextureKey(player);
-    const label = this.createActorNameLabel(0, -32, player.name, "10px");
+    const label = this.createActorNameLabel(0, -29, player.name, "9px");
     const healthBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -26, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
     const healthBar = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2, -26, PLAYER_RESOURCE_BAR_WIDTH, PLAYER_RESOURCE_BAR_HEIGHT, 0x1fa143, 1);
     const manaBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -21, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
@@ -1843,7 +1843,7 @@ export class MainScene extends Phaser.Scene {
 
     return {
       healthY: spriteTop - 2,
-      labelY: spriteTop - 7,
+      labelY: spriteTop - 5,
       shadowHeight: type === "troll" ? 10 : 8,
       shadowWidth: type === "troll" ? 22 : 16,
       spriteHeight,
