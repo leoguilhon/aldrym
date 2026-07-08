@@ -1160,7 +1160,7 @@ export class MainScene extends Phaser.Scene {
     this.playDirectionalAnimation(sprite, outfitTextureKey, "south", "idle");
     const view = {
       facing: "south" as CardinalDirection,
-      container: this.add.container(x, y, [label, healthBack, healthBar, manaBack, manaBar, shadow, sprite]),
+      container: this.add.container(x, y, [shadow, sprite, healthBack, healthBar, manaBack, manaBar, label]),
       healthBack,
       healthBar,
       label,
@@ -1586,7 +1586,7 @@ export class MainScene extends Phaser.Scene {
     hitArea.setOrigin(0.5);
     hitArea.setInteractive();
 
-    const container = this.add.container(x, y, [hitArea, tileMarker, shadow, sprite, label, healthBack, healthBar]);
+    const container = this.add.container(x, y, [hitArea, tileMarker, shadow, sprite, healthBack, healthBar, label]);
     container.setDepth(40);
     hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (pointer.button === 2) {
