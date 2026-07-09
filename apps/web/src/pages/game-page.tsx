@@ -2,6 +2,7 @@ import type {
   CharacterDamagedEvent,
   CharacterSkillState,
   CharacterSummary,
+  ChaseMode,
   CombatErrorEvent,
   CombatStance,
   ContainerErrorEvent,
@@ -29,12 +30,16 @@ import type {
 import {
   createLocalMap,
   equipmentSlots,
+  getExperienceRequiredForLevel,
+  getExperienceRequiredForNextLevel,
   getRemainingFoodSeconds,
+  getTileType,
+  isProtectionZone,
   isItemUsable,
   resolveLocalPlayerSpawn,
   worldEventNames
 } from "@aldrym/shared";
-import { useEffect, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router-dom";
 import { io, type Socket } from "socket.io-client";
 
@@ -53,6 +58,15 @@ const containerWindowDefaultHeightPx = 214;
 const containerWindowGapPx = 8;
 const containerWorkspaceMinimumHeightPx = 560;
 const corpseLootSlotCount = 4;
+const dockPanelIds = ["minimap", "character", "equipment", "skills"] as const;
+type DockPanelId = (typeof dockPanelIds)[number];
+type DockSide = "left" | "right";
+type DockLayout = Record<DockSide, DockPanelId[]>;
+
+const defaultDockLayout: DockLayout = {
+  left: ["character", "skills"],
+  right: ["minimap", "equipment"]
+};
 
 type DragItemLocation =
   | { locationType: "root"; slotIndex: number }
@@ -318,7 +332,7 @@ function Meter({
   current: number;
   label: string;
   maximum: number;
-  tone: "health" | "mana";
+  tone: "experience" | "health" | "mana";
 }) {
   const width = maximum > 0 ? Math.max(0, Math.min(100, (current / maximum) * 100)) : 0;
 
@@ -361,6 +375,216 @@ function formatCombatStance(stance: CombatStance): string {
     default:
       return "Balanced";
   }
+}
+
+function Dock({
+  layout,
+  renderPanel,
+  side
+}: {
+  layout: DockLayout;
+  renderPanel: (panelId: DockPanelId) => ReactNode;
+  side: DockSide;
+}) {
+  return (
+    <aside className={`game-client__dock game-client__dock--${side}`}>
+      {layout[side].map((panelId) => (
+        <div className={`dock-panel dock-panel--${panelId}`} key={panelId}>
+          <div className="dock-panel__content">{renderPanel(panelId)}</div>
+        </div>
+      ))}
+    </aside>
+  );
+}
+
+function CombatIcon({ active = false, kind }: { active?: boolean; kind: CombatStance | ChaseMode | "pvp" }) {
+  if (kind === "defensive") {
+    return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2 20 5v6c0 5-3.4 9-8 11-4.6-2-8-6-8-11V5l8-3Z" /><path d="M12 5v13" /></svg>;
+  }
+  if (kind === "balanced") {
+    return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m4 19 3-3L16 4l3 3L7 16l-3 3Z" /><path d="m15 11 6 2v4c0 2.5-1.7 4.4-4 5.5-2.3-1.1-4-3-4-5.5v-2" /></svg>;
+  }
+  if (kind === "offensive") {
+    return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m4 20 4-4L19 3l2 2L8 16l-4 4ZM20 20l-4-4L5 3 3 5l13 11 4 4Z" /></svg>;
+  }
+  if (kind === "follow") {
+    return <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="14" cy="5" r="2.2" /><path d="m12 8 4 2 3 4M12 8l-4 4-4 1m9-2-2 5-5 5m5-5 7 4" /></svg>;
+  }
+  if (kind === "stand") {
+    return <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.2" /><path d="M12 8v7m-4-4 4-3 4 3m-4 4-4 7m4-7 4 7" /></svg>;
+  }
+  return active
+    ? <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 11V7a2 2 0 0 1 4 0v2-4a2 2 0 0 1 4 0v4-3a2 2 0 0 1 4 0v4-2a2 2 0 0 1 4 0v6c0 5-3 8-8 8s-8-3-8-8v-3Z" /></svg>
+    : <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 13V6a2 2 0 0 1 4 0v5-7a2 2 0 0 1 4 0v7-5a2 2 0 0 1 4 0v8c0 5-3 8-8 8-4 0-7-3-8-7l-1-4a2 2 0 0 1 4-1l1 3Z" /></svg>;
+}
+
+function Minimap({
+  localCharacterId,
+  localPosition,
+  monsters,
+  players
+}: {
+  localCharacterId: string;
+  localPosition: Position | null;
+  monsters: WorldMonster[];
+  players: WorldPlayer[];
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const dragOriginRef = useRef<{ clientX: number; clientY: number; centerX: number; centerY: number } | null>(null);
+  const [viewPosition, setViewPosition] = useState<Position | null>(null);
+  const [zoom, setZoom] = useState(4);
+  const displayedPosition = viewPosition ?? localPosition;
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+
+    if (!canvas || !context || !localPosition || !displayedPosition) {
+      return;
+    }
+
+    const visibleColumns = canvas.width / zoom;
+    const visibleRows = canvas.height / zoom;
+    const startX = displayedPosition.x - visibleColumns / 2;
+    const startY = displayedPosition.y - visibleRows / 2;
+    const tileColors = {
+      dirt: "#8a6037",
+      grass: "#5c733f",
+      stone: "#77766e",
+      wall: "#332a27",
+      water: "#315f78"
+    } as const;
+
+    context.imageSmoothingEnabled = false;
+    context.fillStyle = "#17120f";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (displayedPosition.z === 0) {
+      for (let y = Math.floor(startY); y <= Math.ceil(startY + visibleRows); y += 1) {
+        for (let x = Math.floor(startX); x <= Math.ceil(startX + visibleColumns); x += 1) {
+          const tileType = getTileType(localMap, x, y);
+          if (!tileType) continue;
+          context.fillStyle = tileColors[tileType];
+          context.fillRect(Math.floor((x - startX) * zoom), Math.floor((y - startY) * zoom), zoom + 1, zoom + 1);
+        }
+      }
+    } else {
+      context.fillStyle = "#bca987";
+      context.font = "12px sans-serif";
+      context.textAlign = "center";
+      context.fillText(`No chart for floor ${displayedPosition.z}`, canvas.width / 2, canvas.height / 2);
+    }
+
+    for (const zone of localMap.protectionZones) {
+      if (zone.z !== displayedPosition.z) continue;
+      context.fillStyle = "rgba(128, 205, 230, 0.3)";
+      context.fillRect(
+        Math.floor((zone.x - startX) * zoom),
+        Math.floor((zone.y - startY) * zoom),
+        zone.width * zoom,
+        zone.height * zoom
+      );
+    }
+
+    const drawMarker = (position: Position, color: string, size: number) => {
+      if (position.z !== displayedPosition.z) return;
+      context.fillStyle = "#17120f";
+      context.fillRect(
+        Math.floor((position.x + 0.5 - startX) * zoom - size / 2 - 1),
+        Math.floor((position.y + 0.5 - startY) * zoom - size / 2 - 1),
+        size + 2,
+        size + 2
+      );
+      context.fillStyle = color;
+      context.fillRect(
+        Math.floor((position.x + 0.5 - startX) * zoom - size / 2),
+        Math.floor((position.y + 0.5 - startY) * zoom - size / 2),
+        size,
+        size
+      );
+    };
+
+    for (const monster of monsters) {
+      if (monster.alive) drawMarker(monster, "#d94a3d", Math.max(2, zoom - 1));
+    }
+    for (const player of players) {
+      if (player.characterId !== localCharacterId) drawMarker(player, "#f0cf55", Math.max(2, zoom - 1));
+    }
+    drawMarker(localPosition, "#f7f7f2", Math.max(3, zoom));
+  }, [displayedPosition, localCharacterId, localPosition, monsters, players, zoom]);
+
+  const handleMinimapPointerDown = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event.button !== 0 || !displayedPosition) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragOriginRef.current = {
+      clientX: event.clientX,
+      clientY: event.clientY,
+      centerX: displayedPosition.x,
+      centerY: displayedPosition.y
+    };
+  };
+
+  const handleMinimapPointerMove = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    const origin = dragOriginRef.current;
+    if (!origin || !displayedPosition) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const scaleX = event.currentTarget.width / rect.width;
+    const scaleY = event.currentTarget.height / rect.height;
+    setViewPosition({
+      x: Math.max(0, Math.min(localMap.width - 1, origin.centerX - ((event.clientX - origin.clientX) * scaleX) / zoom)),
+      y: Math.max(0, Math.min(localMap.height - 1, origin.centerY - ((event.clientY - origin.clientY) * scaleY) / zoom)),
+      z: displayedPosition.z
+    });
+  };
+
+  const stopMinimapDrag = (event: ReactPointerEvent<HTMLCanvasElement>) => {
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    dragOriginRef.current = null;
+  };
+
+  return (
+    <section className="client-panel client-panel--minimap">
+      <div className="client-panel__header">
+        <span>Minimap</span>
+        <strong>{displayedPosition ? `${Math.round(displayedPosition.x)}, ${Math.round(displayedPosition.y)}, ${displayedPosition.z}` : "..."}</strong>
+      </div>
+      <div className="minimap-frame">
+        <canvas
+          aria-label="Live minimap. Drag with the left mouse button to explore."
+          height={144}
+          onPointerCancel={stopMinimapDrag}
+          onPointerDown={handleMinimapPointerDown}
+          onPointerMove={handleMinimapPointerMove}
+          onPointerUp={stopMinimapDrag}
+          ref={canvasRef}
+          role="img"
+          width={216}
+        />
+        <span className="minimap-north" aria-hidden="true">N</span>
+      </div>
+      <div className="minimap-controls" aria-label="Minimap controls">
+        <button className="minimap-control" disabled={!displayedPosition} onClick={() => displayedPosition && setViewPosition({ ...displayedPosition, z: displayedPosition.z - 1 })} title="View floor above" type="button">↑</button>
+        {[3, 4, 6].map((value) => (
+          <button
+            aria-pressed={zoom === value}
+            className={zoom === value ? "minimap-control minimap-control--active" : "minimap-control"}
+            key={value}
+            onClick={() => setZoom(value)}
+            type="button"
+          >
+            {value === 3 ? "−" : value === 6 ? "+" : "•"}
+          </button>
+        ))}
+        <button className="minimap-control" disabled={!displayedPosition} onClick={() => displayedPosition && setViewPosition({ ...displayedPosition, z: displayedPosition.z + 1 })} title="View floor below" type="button">↓</button>
+        <button className="minimap-control minimap-control--center" onClick={() => setViewPosition(null)} title="Center on character" type="button">◎</button>
+      </div>
+      <div className="minimap-legend" aria-label="Minimap legend">
+        <span><i className="minimap-dot minimap-dot--self" />You</span>
+        <span><i className="minimap-dot minimap-dot--player" />Player</span>
+        <span><i className="minimap-dot minimap-dot--monster" />Monster</span>
+      </div>
+    </section>
+  );
 }
 
 function GameViewport({
@@ -1125,6 +1349,8 @@ export function GamePage() {
   const containerWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<Socket<WorldServerToClientEvents, WorldClientToServerEvents> | null>(null);
   const [activeCombatMonsterId, setActiveCombatMonsterId] = useState<string | null>(null);
+  const [chaseMode, setChaseMode] = useState<ChaseMode>("stand");
+  const [pvpEnabled, setPvpEnabled] = useState(false);
   const [activeContainerWindowId, setActiveContainerWindowId] = useState<string | null>(null);
   const [character, setCharacter] = useState<CharacterSummary | null>(null);
   const [containerWindowPositions, setContainerWindowPositions] = useState<Record<string, ContainerWindowPosition>>({});
@@ -1549,6 +1775,11 @@ export function GamePage() {
 
   const localPlayer = character ? players.find((player) => player.characterId === character.id) ?? null : null;
   const localPosition = character ? localPlayer ?? resolveLocalPlayerSpawn(localMap, character) : null;
+  const isInProtectionZone = localPosition ? isProtectionZone(localMap, localPosition) : false;
+  const currentLevelExperience = character ? getExperienceRequiredForLevel(character.level) : 0;
+  const nextLevelExperience = character ? getExperienceRequiredForNextLevel(character.level) : 0;
+  const experienceWithinLevel = character ? Math.max(0, character.experience - currentLevelExperience) : 0;
+  const experienceForNextLevel = Math.max(0, nextLevelExperience - currentLevelExperience);
   const foodRemainingSeconds = character ? getRemainingFoodSeconds(character.food.foodExpiresAt, clockMs) : 0;
   const isWorldReady = character !== null && connectionState === "joined" && localPlayer !== null;
   const containerWindowDescriptors: ContainerWindowDescriptor[] = [
@@ -1622,6 +1853,11 @@ export function GamePage() {
 
     if (!socket || !socket.connected || connectionState !== "joined") {
       return;
+    }
+
+    if (chaseMode === "follow") {
+      setChaseMode("stand");
+      socket.emit(worldEventNames.combatSetChaseMode, { mode: "stand" });
     }
 
     socket.emit(worldEventNames.playerMove, { direction });
@@ -1778,6 +2014,25 @@ export function GamePage() {
     }
 
     socket.emit(worldEventNames.combatSetStance, { stance });
+  };
+
+  const handleSetChaseMode = (mode: ChaseMode) => {
+    if (connectionState !== "joined") {
+      return;
+    }
+
+    setChaseMode(mode);
+    socketRef.current?.emit(worldEventNames.combatSetChaseMode, { mode });
+  };
+
+  const handleSetPvpMode = () => {
+    if (connectionState !== "joined") {
+      return;
+    }
+
+    const enabled = !pvpEnabled;
+    setPvpEnabled(enabled);
+    socketRef.current?.emit(worldEventNames.combatSetPvpMode, { enabled });
   };
 
   useEffect(() => {
@@ -2021,6 +2276,88 @@ export function GamePage() {
     );
   }
 
+  const renderDockPanel = (panelId: DockPanelId): ReactNode => {
+    switch (panelId) {
+      case "minimap":
+        return (
+          <Minimap
+            localCharacterId={character.id}
+            localPosition={localPosition}
+            monsters={monsters}
+            players={players}
+          />
+        );
+      case "character":
+        return (
+          <section className="client-panel">
+            <div className="client-panel__header"><span>Character</span></div>
+            <h2>{character.name}</h2>
+            <Meter current={experienceWithinLevel} label={`Level ${character.level}`} maximum={experienceForNextLevel} tone="experience" />
+            <Meter current={character.health} label="Health" maximum={character.maxHealth} tone="health" />
+            <Meter current={character.mana} label="Mana" maximum={character.maxMana} tone="mana" />
+            <dl className="client-stat-grid client-stat-grid--primary">
+              <div><dt>Experience</dt><dd>{character.experience}</dd></div>
+              <div><dt>Position</dt><dd><PositionLabel position={localPosition} /></dd></div>
+            </dl>
+            <div className="character-combat-bar">
+              <div className="combat-status-bar" aria-label="Combat status">
+                {isInProtectionZone ? <span className="combat-status-badge" title="Protection zone"><img alt="Protection zone" src="/assets/ui/protection-zone.png" /></span> : null}
+              </div>
+              <div className="character-combat-buttons" role="group" aria-label="Combat controls">
+                {(["follow", "stand"] as ChaseMode[]).map((mode) => (
+                  <button className={chaseMode === mode ? "compact-combat-button compact-combat-button--active" : "compact-combat-button"} key={mode} onClick={() => handleSetChaseMode(mode)} title={mode === "follow" ? "Follow target" : "Stand while attacking"} type="button">
+                    <CombatIcon kind={mode} />
+                  </button>
+                ))}
+                <button aria-pressed={pvpEnabled} className={pvpEnabled ? "compact-combat-button compact-combat-button--danger" : "compact-combat-button"} onClick={handleSetPvpMode} title={pvpEnabled ? "Disable open PvP" : "Enable open PvP"} type="button">
+                  <CombatIcon active={pvpEnabled} kind="pvp" />
+                </button>
+                {(["offensive", "balanced", "defensive"] as CombatStance[]).map((stance) => (
+                  <button className={stance === character.combatStats.stance ? "compact-combat-button compact-combat-button--active" : "compact-combat-button"} key={stance} onClick={() => handleSetCombatStance(stance)} title={formatCombatStance(stance)} type="button">
+                    <CombatIcon kind={stance} />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+        );
+      case "equipment":
+        return (
+          <section className="client-panel">
+            <div className="client-panel__header">
+              <span>Equipment</span>
+              <strong>{equipmentItems.filter((slot) => slot.item).length} / {equipmentItems.length}</strong>
+            </div>
+            <EquipmentPanel
+              onDropItem={handleDropItem}
+              onTakeCorpseItemToTarget={handleTakeCorpseItemToTarget}
+              onTakeGroundItemToTarget={handleTakeGroundItemToTarget}
+              onOpenContainer={handleOpenContainer}
+              onQuickEquip={handleQuickEquip}
+              onUseItem={handleUseItem}
+              slots={equipmentItems}
+            />
+          </section>
+        );
+      case "skills":
+        return (
+          <section className="client-panel">
+            <div className="client-panel__header"><span>Skills</span></div>
+            <div className="skill-meter-list">
+              <SkillMeter label="Fist Fighting" skill={character.skills.fist} />
+              <SkillMeter label="Sword Fighting" skill={character.skills.sword} />
+              <SkillMeter label="Axe Fighting" skill={character.skills.axe} />
+              <SkillMeter label="Club Fighting" skill={character.skills.club} />
+              <SkillMeter label="Distance Fighting" skill={character.skills.distance} />
+              <SkillMeter label="Shielding" skill={character.skills.shielding} />
+              <SkillMeter label="Magic Level" skill={character.skills.magicLevel} />
+              <SkillMeter label="Fishing" skill={character.skills.fishing} />
+            </div>
+          </section>
+        );
+    }
+  };
+
   return (
     <section className="game-client">
       <main className="game-client__main">
@@ -2120,13 +2457,34 @@ export function GamePage() {
         </section>
       </main>
 
-      <aside className="game-client__sidebar">
+      <Dock
+        layout={defaultDockLayout}
+        renderPanel={renderDockPanel}
+        side="left"
+      />
+      <Dock
+        layout={defaultDockLayout}
+        renderPanel={renderDockPanel}
+        side="right"
+      />
+      {character ? <aside className="game-client__sidebar game-client__sidebar--legacy">
+        <Minimap
+          localCharacterId={character.id}
+          localPosition={localPosition}
+          monsters={monsters}
+          players={players}
+        />
         <section className="client-panel">
           <div className="client-panel__header">
             <span>Character</span>
-            <strong>Level {character.level} {character.characterClass}</strong>
           </div>
           <h2>{character.name}</h2>
+          <Meter
+            current={experienceWithinLevel}
+            label={`Level ${character.level}`}
+            maximum={experienceForNextLevel}
+            tone="experience"
+          />
           <Meter current={character.health} label="Health" maximum={character.maxHealth} tone="health" />
           <Meter current={character.mana} label="Mana" maximum={character.maxMana} tone="mana" />
           <dl className="client-stat-grid client-stat-grid--primary">
@@ -2182,17 +2540,50 @@ export function GamePage() {
               <dd>{foodRemainingSeconds > 0 ? `${foodRemainingSeconds}s` : "Hungry"}</dd>
             </div>
           </dl>
+          <div className="combat-status-bar" aria-label="Combat status">
+            {isInProtectionZone ? (
+              <span className="combat-status-badge" title="Protection zone">
+                <img alt="Protection zone" src="/assets/ui/protection-zone.png" />
+              </span>
+            ) : null}
+          </div>
           <div className="combat-stance-group" role="group" aria-label="Combat stance">
             {(["offensive", "balanced", "defensive"] as CombatStance[]).map((stance) => (
               <button
                 className={stance === character.combatStats.stance ? "combat-stance-button combat-stance-button--active" : "combat-stance-button"}
                 key={stance}
                 onClick={() => handleSetCombatStance(stance)}
+                title={formatCombatStance(stance)}
                 type="button"
               >
-                {formatCombatStance(stance)}
+                <CombatIcon kind={stance} />
+                <span>{formatCombatStance(stance)}</span>
               </button>
             ))}
+          </div>
+          <div className="combat-action-group" role="group" aria-label="Chase and PvP controls">
+            {(["stand", "follow"] as ChaseMode[]).map((mode) => (
+              <button
+                className={chaseMode === mode ? "combat-action-button combat-action-button--active" : "combat-action-button"}
+                key={mode}
+                onClick={() => handleSetChaseMode(mode)}
+                title={mode === "follow" ? "Follow target" : "Stand while attacking"}
+                type="button"
+              >
+                <CombatIcon kind={mode} />
+                <span>{mode === "follow" ? "Follow" : "Stand"}</span>
+              </button>
+            ))}
+            <button
+              aria-pressed={pvpEnabled}
+              className={pvpEnabled ? "combat-action-button combat-action-button--danger" : "combat-action-button"}
+              onClick={handleSetPvpMode}
+              title={pvpEnabled ? "Disable open PvP" : "Enable open PvP"}
+              type="button"
+            >
+              <CombatIcon active={pvpEnabled} kind="pvp" />
+              <span>PvP</span>
+            </button>
           </div>
         </section>
 
@@ -2213,7 +2604,7 @@ export function GamePage() {
           </div>
         </section>
         {worldErrorMessage ? <p className="form-message form-message--error">{worldErrorMessage}</p> : null}
-      </aside>
+      </aside> : null}
       {groundDragPreview ? (
         <img
           alt=""

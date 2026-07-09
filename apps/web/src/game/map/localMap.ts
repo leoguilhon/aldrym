@@ -6,6 +6,7 @@ export {
   getTileCenter,
   getTileType,
   isMoveDirection,
+  isProtectionZone,
   isWalkableTile,
   isWithinMapBounds,
   moveDirections,

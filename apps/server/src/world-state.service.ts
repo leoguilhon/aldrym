@@ -79,7 +79,7 @@ const initialMonsterSpawns: MonsterSpawn[] = [
     maxDamage: 15,
     maxHealth: 50,
     experienceReward: 20,
-    position: { x: 16, y: 11, z: 0 },
+    position: { x: 24, y: 12, z: 0 },
     respawnMs: 30000,
     retreatAtHealth: 15
   }

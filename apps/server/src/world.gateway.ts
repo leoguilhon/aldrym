@@ -5,6 +5,7 @@ import type {
   CharacterLevelUpEvent,
   CharacterSummary,
   CharacterUpdatedEvent,
+  ChaseMode,
   CombatStance,
   CombatErrorEvent,
   CombatStoppedEvent,
@@ -41,6 +42,8 @@ import type {
   PlayerMovedEvent,
   Position,
   SetCombatStanceRequest,
+  SetChaseModeRequest,
+  SetPvpModeRequest,
   WorldClientToServerEvents,
   WorldCorpsesEvent,
   WorldErrorEvent,
@@ -53,12 +56,14 @@ import type {
 } from "@aldrym/shared";
 import {
   combatStances,
+  chaseModes,
   createLocalMap,
   getRegenerationPerSecond,
   getMovementCooldownMs,
   getNextPosition,
   getTileType,
   isMoveDirection,
+  isProtectionZone,
   isWalkableTile,
   resolveLocalPlayerSpawn,
   worldEventNames
@@ -131,6 +136,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   private readonly lockedCorpseItemKeys = new Set<string>();
   private readonly lockedGroundItemIds = new Set<string>();
   private readonly playerCombatStanceBySocketId = new Map<string, CombatStance>();
+  private readonly playerChaseModeBySocketId = new Map<string, ChaseMode>();
+  private readonly playerPvpModeBySocketId = new Map<string, boolean>();
   private readonly playerFoodExpiresAtBySocketId = new Map<string, number>();
   private readonly playerHealthRegenCarryBySocketId = new Map<string, number>();
   private readonly playerManaRegenCarryBySocketId = new Map<string, number>();
@@ -179,6 +186,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     this.nextPlayerMoveAtBySocketId.delete(client.id);
     this.openedContainerIdsBySocketId.delete(client.id);
     this.playerCombatStanceBySocketId.delete(client.id);
+    this.playerChaseModeBySocketId.delete(client.id);
+    this.playerPvpModeBySocketId.delete(client.id);
     this.playerFoodExpiresAtBySocketId.delete(client.id);
     this.playerHealthRegenCarryBySocketId.delete(client.id);
     this.playerManaRegenCarryBySocketId.delete(client.id);
@@ -266,6 +275,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       this.nextPlayerAttackAtBySocketId.delete(client.id);
       this.nextPlayerMoveAtBySocketId.delete(client.id);
       this.playerCombatStanceBySocketId.set(client.id, "balanced");
+      this.playerChaseModeBySocketId.set(client.id, "stand");
+      this.playerPvpModeBySocketId.set(client.id, false);
       this.playerFoodExpiresAtBySocketId.set(client.id, character.food.foodExpiresAt ? Date.parse(character.food.foodExpiresAt) : 0);
       this.playerHealthRegenCarryBySocketId.set(client.id, 0);
       this.playerManaRegenCarryBySocketId.set(client.id, 0);
@@ -358,11 +369,17 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
+    this.playerChaseModeBySocketId.set(client.id, "stand");
+
     const movedPayload: PlayerMovedEvent = {
       player: this.worldStateService.toWorldPlayer(updatedPlayer)
     };
 
     this.server.emit(worldEventNames.playerMoved, movedPayload);
+
+    if (isProtectionZone(this.localMap, nextPosition)) {
+      this.stopCombatSession(client, "target_lost");
+    }
   }
 
   @SubscribeMessage(worldEventNames.combatAttack)
@@ -400,6 +417,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
     if (!monster.alive) {
       this.emitCombatError(client, "That monster is already defeated.", "monster_dead");
+      return;
+    }
+
+    if (isProtectionZone(this.localMap, activePlayer.position) || isProtectionZone(this.localMap, monster)) {
+      this.emitCombatError(client, "Combat is not allowed in a protection zone.", "protection_zone");
       return;
     }
 
@@ -444,6 +466,42 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
     this.playerCombatStanceBySocketId.set(client.id, stance);
     await this.emitCharacterState(client, user.id, activePlayer.characterId);
+  }
+
+  @SubscribeMessage(worldEventNames.combatSetChaseMode)
+  handleCombatSetChaseMode(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: SetChaseModeRequest
+  ): void {
+    if (!this.worldStateService.getPlayerBySocketId(client.id)) {
+      this.emitCombatError(client, "Join the world before changing chase mode.", "world_join_required");
+      return;
+    }
+
+    if (!payload?.mode || !chaseModes.includes(payload.mode)) {
+      this.emitCombatError(client, "That chase mode does not exist.", "invalid_chase_mode");
+      return;
+    }
+
+    this.playerChaseModeBySocketId.set(client.id, payload.mode);
+  }
+
+  @SubscribeMessage(worldEventNames.combatSetPvpMode)
+  handleCombatSetPvpMode(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: SetPvpModeRequest
+  ): void {
+    if (!this.worldStateService.getPlayerBySocketId(client.id)) {
+      this.emitCombatError(client, "Join the world before changing PvP mode.", "world_join_required");
+      return;
+    }
+
+    if (typeof payload?.enabled !== "boolean") {
+      this.emitCombatError(client, "PvP mode is invalid.", "invalid_pvp_mode");
+      return;
+    }
+
+    this.playerPvpModeBySocketId.set(client.id, payload.enabled);
   }
 
   @SubscribeMessage(worldEventNames.corpseOpen)
@@ -1295,6 +1353,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
+    if (isProtectionZone(this.localMap, activePlayer.position) || isProtectionZone(this.localMap, monster)) {
+      this.stopCombatSession(client, "target_lost");
+      return;
+    }
+
     if (!this.isWithinPlayerScreen(activePlayer.position, monster)) {
       this.stopCombatSession(client, "out_of_range");
       return;
@@ -1435,6 +1498,10 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         continue;
       }
 
+      if (isProtectionZone(this.localMap, candidate)) {
+        continue;
+      }
+
       if (this.worldStateService.isAliveMonsterAt(candidate, monster.id)) {
         continue;
       }
@@ -1468,6 +1535,10 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         continue;
       }
 
+      if (isProtectionZone(this.localMap, candidate)) {
+        continue;
+      }
+
       if (this.worldStateService.isAliveMonsterAt(candidate, monster.id)) {
         continue;
       }
@@ -1494,7 +1565,10 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         continue;
       }
 
-      const target = this.findNearestPlayerInPursuitRange(monster, players);
+      const target = this.findNearestPlayerInPursuitRange(
+        monster,
+        players.filter((player) => !isProtectionZone(this.localMap, player))
+      );
 
       if (!target) {
         continue;
@@ -1530,12 +1604,82 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
       this.server.emit(worldEventNames.monsterMoved, movedPayload);
     }
+
+    this.performPlayerFollowTick();
+  }
+
+  private performPlayerFollowTick(): void {
+    for (const [socketId, session] of this.combatSessions) {
+      if (this.playerChaseModeBySocketId.get(socketId) !== "follow") {
+        continue;
+      }
+
+      const player = this.worldStateService.getPlayerBySocketId(socketId);
+      const monster = this.worldStateService.getMonster(session.monsterId);
+
+      if (!player || !monster?.alive || this.isAdjacent(player.position, monster)) {
+        continue;
+      }
+
+      if (isProtectionZone(this.localMap, player.position) || isProtectionZone(this.localMap, monster)) {
+        const client = this.server.sockets.sockets.get(socketId) as WorldSocket | undefined;
+        if (client) this.stopCombatSession(client, "target_lost");
+        continue;
+      }
+
+      const now = Date.now();
+      if (now < (this.nextPlayerMoveAtBySocketId.get(socketId) ?? 0)) {
+        continue;
+      }
+
+      const nextPosition = this.getNextFollowerPosition(player.position, monster);
+      if (!nextPosition) {
+        continue;
+      }
+
+      this.nextPlayerMoveAtBySocketId.set(socketId, now + getMovementCooldownMs(player.level));
+      const movedPlayer = this.worldStateService.updatePlayerPosition(socketId, nextPosition);
+      if (movedPlayer) {
+        this.server.emit(worldEventNames.playerMoved, {
+          player: this.worldStateService.toWorldPlayer(movedPlayer)
+        });
+      }
+    }
+  }
+
+  private getNextFollowerPosition(player: Position, target: Position): Position | null {
+    const deltaX = target.x - player.x;
+    const deltaY = target.y - player.y;
+    const candidates: Position[] = [];
+
+    if (Math.abs(deltaX) >= Math.abs(deltaY)) {
+      if (deltaX !== 0) candidates.push({ ...player, x: player.x + Math.sign(deltaX) });
+      if (deltaY !== 0) candidates.push({ ...player, y: player.y + Math.sign(deltaY) });
+    } else {
+      if (deltaY !== 0) candidates.push({ ...player, y: player.y + Math.sign(deltaY) });
+      if (deltaX !== 0) candidates.push({ ...player, x: player.x + Math.sign(deltaX) });
+    }
+
+    return (
+      candidates.find(
+        (candidate) =>
+          !this.isSamePosition(candidate, target) &&
+          isWalkableTile(this.localMap, candidate) &&
+          !isProtectionZone(this.localMap, candidate) &&
+          !this.worldStateService.isAliveMonsterAt(candidate) &&
+          !this.worldStateService.isPlayerAt(candidate)
+      ) ?? null
+    );
   }
 
   private async performMonsterAttack(monster: Position & { id: string; armor: number; maxDamage: number }, characterId: string): Promise<void> {
     const activePlayer = this.worldStateService.getPlayerByCharacterId(characterId);
 
     if (!activePlayer) {
+      return;
+    }
+
+    if (isProtectionZone(this.localMap, activePlayer.position)) {
       return;
     }
 

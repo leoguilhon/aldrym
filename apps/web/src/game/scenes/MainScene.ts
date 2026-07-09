@@ -15,6 +15,7 @@ interface PlayerView {
   facing: CardinalDirection;
   healthBack: Phaser.GameObjects.Rectangle;
   healthBar: Phaser.GameObjects.Rectangle;
+  hud: Phaser.GameObjects.Container;
   label: Phaser.GameObjects.Text;
   manaBack: Phaser.GameObjects.Rectangle;
   manaBar: Phaser.GameObjects.Rectangle;
@@ -30,6 +31,7 @@ interface MonsterView {
   facing: CardinalDirection;
   healthBack: Phaser.GameObjects.Rectangle;
   healthBar: Phaser.GameObjects.Rectangle;
+  hud: Phaser.GameObjects.Container;
   hitArea: Phaser.GameObjects.Zone;
   label: Phaser.GameObjects.Text;
   monsterType: WorldMonster["type"];
@@ -90,7 +92,6 @@ const ACTOR_NAME_LABEL_STROKE = "#000000";
 const ACTOR_NAME_LABEL_STROKE_THICKNESS = 2;
 const ACTOR_NAME_LABEL_RESOLUTION = 2;
 const ACTOR_NAME_LABEL_FONT_FAMILY = '"Palatino Linotype", "Book Antiqua", Georgia, serif';
-const PLAYER_NAME_LABEL_DEPTH = 90;
 const PLAYER_NAME_LABEL_OFFSET_Y = -29;
 const MONSTER_HEALTH_BAR_WIDTH = 24;
 const MONSTER_HEALTH_BAR_HEIGHT = 4;
@@ -403,6 +404,20 @@ export class MainScene extends Phaser.Scene {
         tile.setDisplaySize(this.map.tileSize, this.map.tileSize);
         tile.setDepth(tileType === "wall" ? 3 : 1);
       }
+    }
+
+    for (const zone of this.map.protectionZones) {
+      const veil = this.add.rectangle(
+        zone.x * this.map.tileSize,
+        zone.y * this.map.tileSize,
+        zone.width * this.map.tileSize,
+        zone.height * this.map.tileSize,
+        0x78a9c6,
+        0.08
+      );
+      veil.setOrigin(0);
+      veil.setDepth(2);
+      veil.setStrokeStyle(1, 0xb8dce9, 0.22);
     }
   }
 
@@ -1032,7 +1047,6 @@ export class MainScene extends Phaser.Scene {
     for (const [characterId, view] of this.playerViews.entries()) {
       if (!activeCharacterIds.has(characterId)) {
         view.container.destroy(true);
-        view.label.destroy();
         this.playerViews.delete(characterId);
       }
     }
@@ -1108,7 +1122,6 @@ export class MainScene extends Phaser.Scene {
     existingView.label.setText(player.name);
     this.updatePlayerResourceBars(existingView, player);
     this.tweens.killTweensOf(existingView.container);
-    this.tweens.killTweensOf(existingView.label);
     const nextDirection = this.inferFacingDirection(existingView.container, { x, y }, existingView.facing);
     const isMoving = existingView.container.x !== x || existingView.container.y !== y;
     existingView.facing = nextDirection;
@@ -1120,7 +1133,6 @@ export class MainScene extends Phaser.Scene {
     }
 
     if (!isMoving) {
-      existingView.label.setPosition(x, y + PLAYER_NAME_LABEL_OFFSET_Y);
       this.playDirectionalAnimation(existingView.sprite, existingView.outfitTextureKey, existingView.facing, "idle");
       return;
     }
@@ -1142,19 +1154,12 @@ export class MainScene extends Phaser.Scene {
         this.playDirectionalAnimation(existingView.sprite, existingView.outfitTextureKey, existingView.facing, "idle");
       }
     });
-    this.tweens.add({
-      targets: existingView.label,
-      x,
-      y: y + PLAYER_NAME_LABEL_OFFSET_Y,
-      duration: movementDuration,
-      ease: "Linear"
-    });
   }
 
   private createPlayerView(player: WorldPlayer, x: number, y: number): PlayerView {
     const isLocalPlayer = player.characterId === this.localCharacterId;
     const outfitTextureKey = this.getPlayerOutfitTextureKey(player);
-    const label = this.createActorNameLabel(x, y + PLAYER_NAME_LABEL_OFFSET_Y, player.name, "9px");
+    const label = this.createActorNameLabel(0, PLAYER_NAME_LABEL_OFFSET_Y, player.name, "9px");
     const healthBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -26, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
     const healthBar = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2, -26, PLAYER_RESOURCE_BAR_WIDTH, PLAYER_RESOURCE_BAR_HEIGHT, 0x1fa143, 1);
     const manaBack = this.add.rectangle(-PLAYER_RESOURCE_BAR_WIDTH / 2 - 1, -21, PLAYER_RESOURCE_BAR_WIDTH + 2, PLAYER_RESOURCE_BAR_HEIGHT + 2, 0x1b0f0a, 0.95);
@@ -1168,14 +1173,16 @@ export class MainScene extends Phaser.Scene {
     manaBack.setOrigin(0, 0.5);
     manaBack.setStrokeStyle(1, 0xf0d18c, 0.22);
     manaBar.setOrigin(0, 0.5);
+    const hud = this.add.container(0, 0, [label, healthBack, healthBar, manaBack, manaBar]);
     sprite.setOrigin(0.5, 1);
     sprite.setDisplaySize(34, 34);
     this.playDirectionalAnimation(sprite, outfitTextureKey, "south", "idle");
     const view = {
       facing: "south" as CardinalDirection,
-      container: this.add.container(x, y, [shadow, sprite, healthBack, healthBar, manaBack, manaBar]),
+      container: this.add.container(x, y, [shadow, sprite, hud]),
       healthBack,
       healthBar,
+      hud,
       label,
       manaBack,
       manaBar,
@@ -1186,7 +1193,6 @@ export class MainScene extends Phaser.Scene {
     };
 
     view.container.setDepth(isLocalPlayer ? 20 : 16);
-    label.setDepth(PLAYER_NAME_LABEL_DEPTH);
     this.updatePlayerResourceBars(view, player);
 
     return view;
@@ -1600,7 +1606,8 @@ export class MainScene extends Phaser.Scene {
     hitArea.setOrigin(0.5);
     hitArea.setInteractive();
 
-    const container = this.add.container(x, y, [hitArea, tileMarker, shadow, sprite, healthBack, healthBar, label]);
+    const hud = this.add.container(0, 0, [label, healthBack, healthBar]);
+    const container = this.add.container(x, y, [hitArea, tileMarker, shadow, sprite, hud]);
     container.setDepth(40);
     hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
       if (pointer.button === 2) {
@@ -1614,6 +1621,7 @@ export class MainScene extends Phaser.Scene {
       facing: "south" as CardinalDirection,
       healthBack,
       healthBar,
+      hud,
       hitArea,
       label,
       monsterType: monster.type,

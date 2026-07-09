@@ -568,8 +568,12 @@ export interface LocalMapData {
   height: number;
   tileSize: number;
   defaultSpawn: Position;
+  protectionZones: Array<{ x: number; y: number; width: number; height: number; z: number }>;
   tiles: LocalTileType[][];
 }
+
+export const chaseModes = ["stand", "follow"] as const;
+export type ChaseMode = (typeof chaseModes)[number];
 
 export interface WorldPlayer extends Position {
   characterId: string;
@@ -1036,6 +1040,14 @@ export interface SetCombatStanceRequest {
   stance: CombatStance;
 }
 
+export interface SetChaseModeRequest {
+  mode: ChaseMode;
+}
+
+export interface SetPvpModeRequest {
+  enabled: boolean;
+}
+
 export interface PlayerMovedEvent {
   player: WorldPlayer;
 }
@@ -1212,6 +1224,8 @@ export interface WorldClientToServerEvents {
   "combat:attack": (payload: AttackMonsterRequest) => void;
   "combat:stop": (payload?: StopCombatRequest) => void;
   "combat:set-stance": (payload: SetCombatStanceRequest) => void;
+  "combat:set-chase-mode": (payload: SetChaseModeRequest) => void;
+  "combat:set-pvp-mode": (payload: SetPvpModeRequest) => void;
   "corpse:open": (payload: CorpseOpenRequest) => void;
   "corpse:move": (payload: CorpseMoveRequest) => void;
   "corpse:take-item": (payload: CorpseTakeItemRequest) => void;
@@ -1284,6 +1298,8 @@ export const worldEventNames = {
   combatAttack: "combat:attack",
   combatStop: "combat:stop",
   combatSetStance: "combat:set-stance",
+  combatSetChaseMode: "combat:set-chase-mode",
+  combatSetPvpMode: "combat:set-pvp-mode",
   monsterSpawned: "monster:spawned",
   monsterDamaged: "monster:damaged",
   monsterDied: "monster:died",
@@ -1329,8 +1345,8 @@ export const worldEventNames = {
   combatError: "combat:error"
 } as const;
 
-const localMapWidth = 30;
-const localMapHeight = 20;
+const localMapWidth = 60;
+const localMapHeight = 50;
 const localTileSize = 32;
 
 function createFilledTiles(width: number, height: number, tileType: LocalTileType): LocalTileType[][] {
@@ -1445,13 +1461,37 @@ export function createLocalMap(): LocalMapData {
     "dirt"
   );
 
+  // Extend the original crossroads into a world with exactly five times its tile area.
+  paintRect(tiles, 29, 9, 31, 2, "dirt");
+  paintRect(tiles, 5, 20, 2, 30, "dirt");
+  paintRect(tiles, 34, 4, 2, 39, "dirt");
+  paintRect(tiles, 6, 31, 47, 2, "dirt");
+  paintRect(tiles, 42, 17, 12, 8, "stone");
+  paintRect(tiles, 45, 19, 6, 4, "grass");
+  paintRect(tiles, 12, 37, 13, 8, "water");
+  paintRect(tiles, 15, 35, 7, 2, "water");
+  paintRect(tiles, 46, 37, 10, 7, "water");
+  paintRect(tiles, 49, 35, 5, 2, "water");
+
   return {
     width: localMapWidth,
     height: localMapHeight,
     tileSize: localTileSize,
     defaultSpawn: { x: 6, y: 10, z: 0 },
+    protectionZones: [{ x: 10, y: 6, width: 9, height: 7, z: 0 }],
     tiles
   };
+}
+
+export function isProtectionZone(map: LocalMapData, position: Position): boolean {
+  return map.protectionZones.some(
+    (zone) =>
+      zone.z === position.z &&
+      position.x >= zone.x &&
+      position.x < zone.x + zone.width &&
+      position.y >= zone.y &&
+      position.y < zone.y + zone.height
+  );
 }
 
 export function getTileType(map: LocalMapData, x: number, y: number): LocalTileType | null {

@@ -54,3 +54,8 @@
 - The current MVP treats the equipped backpack as the carried inventory, with persisted equipment slots and item-defined container capacities such as the 20-slot basic backpack.
 - Food consumption is authoritative. Edible items add to a persisted food timer up to a 1,200-second cap, and a server tick regenerates health and mana over time while a character is fed.
 - Player death and respawn are not implemented yet. Incoming damage currently clamps health at `1` as a temporary safeguard while the death loop is still pending.
+## World Safety and Combat Controls
+
+The shared local map contract defines protection-zone rectangles alongside terrain. The server is authoritative for zone restrictions: monsters cannot enter, acquire, follow, or damage protected players, and player combat sessions stop when the player enters a protected tile.
+
+Combat stance, chase mode, and open-PvP preference are server-owned per online session. Follow mode uses the normal movement cooldown and collision checks; it never permits the client to choose a resulting position.
