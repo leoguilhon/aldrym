@@ -1,5 +1,14 @@
 import { getMovementCooldownMs, getMovementTweenDurationMs } from "@aldrym/shared";
-import type { Corpse, GroundItem, InventoryMoveTarget, MoveDirection, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type {
+  CardinalDirection,
+  Corpse,
+  GroundItem,
+  InventoryMoveTarget,
+  MoveDirection,
+  Position,
+  WorldMonster,
+  WorldPlayer
+} from "@aldrym/shared";
 import Phaser from "phaser";
 
 import {
@@ -76,6 +85,7 @@ export interface MainSceneOptions {
   onAttackMonster?: (monsterId: string) => void;
   onMoveCorpse?: (corpseId: string, position: Position) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
+  onTurnIntent?: (direction: CardinalDirection) => void;
   onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   onOpenCorpse?: (corpseId: string) => void;
   onShowNotice?: (message: string) => void;
@@ -98,7 +108,6 @@ const MONSTER_HEALTH_BAR_HEIGHT = 4;
 const PLAYER_RESOURCE_BAR_WIDTH = 28;
 const PLAYER_RESOURCE_BAR_HEIGHT = 3;
 const RESPAWN_WARNING_MS = 3000;
-type CardinalDirection = "south" | "north" | "east" | "west";
 type AnimationState = "idle" | "walk-a" | "walk-b";
 type InventoryContainerOrEquipmentTarget = Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>;
 type AutoInteraction =
@@ -141,6 +150,7 @@ const itemTextureKeys = {
   wooden_shield: "item-wooden-shield"
 } as const;
 const cardinalDirections: CardinalDirection[] = ["south", "north", "east", "west"];
+const cardinalPathMoveDirections: MoveDirection[] = ["up", "down", "left", "right"];
 const pathMoveDirections: MoveDirection[] = ["up-left", "up-right", "down-left", "down-right", "up", "down", "left", "right"];
 
 export class MainScene extends Phaser.Scene {
@@ -150,6 +160,7 @@ export class MainScene extends Phaser.Scene {
   private readonly onAttackMonster?: (monsterId: string) => void;
   private readonly onMoveCorpse?: (corpseId: string, position: Position) => void;
   private readonly onMoveIntent?: (direction: MoveDirection) => void;
+  private readonly onTurnIntent?: (direction: CardinalDirection) => void;
   private readonly onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   private readonly onOpenCorpse?: (corpseId: string) => void;
   private readonly onShowNotice?: (message: string) => void;
@@ -159,6 +170,7 @@ export class MainScene extends Phaser.Scene {
     target: InventoryContainerOrEquipmentTarget
   ) => void;
   private readonly pressedMovementCodes = new Set<string>();
+  private isTurnModifierHeld = false;
   private nextMoveAt = 0;
   private isSceneReady = false;
   private pendingCorpses: Corpse[];
@@ -186,6 +198,7 @@ export class MainScene extends Phaser.Scene {
     this.onAttackMonster = options.onAttackMonster;
     this.onMoveCorpse = options.onMoveCorpse;
     this.onMoveIntent = options.onMoveIntent;
+    this.onTurnIntent = options.onTurnIntent;
     this.onMoveGroundItem = options.onMoveGroundItem;
     this.onOpenCorpse = options.onOpenCorpse;
     this.onShowNotice = options.onShowNotice;
@@ -430,12 +443,43 @@ export class MainScene extends Phaser.Scene {
 
     this.input.mouse?.disableContextMenu();
     keyboard.on("keydown", (event: KeyboardEvent) => {
+      if (event.code === "ShiftLeft" || event.code === "ShiftRight") {
+        this.isTurnModifierHeld = true;
+
+        if (!event.repeat) {
+          const pressedTurnDirection = this.getPressedTurnDirection();
+
+          if (pressedTurnDirection) {
+            event.preventDefault();
+            this.emitTurnIntent(pressedTurnDirection);
+          }
+        }
+
+        return;
+      }
+
       if (this.isMovementCode(event.code)) {
         event.preventDefault();
+
+        if (event.shiftKey || this.isTurnModifierHeld) {
+          const turnDirection = this.getTurnDirectionForMovementCode(event.code);
+
+          if (turnDirection && !event.repeat) {
+            this.emitTurnIntent(turnDirection);
+          }
+
+          return;
+        }
+
         this.pressedMovementCodes.add(event.code);
       }
     });
     keyboard.on("keyup", (event: KeyboardEvent) => {
+      if (event.code === "ShiftLeft" || event.code === "ShiftRight") {
+        this.isTurnModifierHeld = false;
+        return;
+      }
+
       if (this.isMovementCode(event.code)) {
         event.preventDefault();
         this.pressedMovementCodes.delete(event.code);
@@ -575,6 +619,10 @@ export class MainScene extends Phaser.Scene {
   }
 
   private getRequestedDirection(): MoveDirection | null {
+    if (this.isTurnModifierHeld) {
+      return null;
+    }
+
     if (this.pressedMovementCodes.has("KeyQ")) {
       return "up-left";
     }
@@ -642,6 +690,24 @@ export class MainScene extends Phaser.Scene {
       return [];
     }
 
+    const cardinalPath = this.findPathToTileWithDirections(start, target, cardinalPathMoveDirections);
+
+    if (cardinalPath.length > 0) {
+      return cardinalPath;
+    }
+
+    return this.findPathToTileWithDirections(start, target, pathMoveDirections);
+  }
+
+  private findPathToTileWithDirections(
+    start: Position,
+    target: Position,
+    allowedDirections: readonly MoveDirection[]
+  ): MoveDirection[] {
+    if (!this.isTileAvailableForClickWalk(target)) {
+      return [];
+    }
+
     const startKey = this.getPositionKey(start);
     const targetKey = this.getPositionKey(target);
     const queue: Position[] = [start];
@@ -650,7 +716,7 @@ export class MainScene extends Phaser.Scene {
 
     for (let index = 0; index < queue.length; index += 1) {
       const current = queue[index];
-      const sortedDirections = this.getPathDirectionsToward(current, target);
+      const sortedDirections = this.getPathDirectionsToward(current, target, allowedDirections);
 
       for (const direction of sortedDirections) {
         const nextPosition = getNextPosition(current, direction);
@@ -677,34 +743,38 @@ export class MainScene extends Phaser.Scene {
     return [];
   }
 
-  private getPathDirectionsToward(current: Position, target: Position): MoveDirection[] {
+  private getPathDirectionsToward(
+    current: Position,
+    target: Position,
+    allowedDirections: readonly MoveDirection[]
+  ): MoveDirection[] {
     const deltaX = Math.sign(target.x - current.x);
     const deltaY = Math.sign(target.y - current.y);
     const preferredDirections: MoveDirection[] = [];
 
-    if (deltaX < 0 && deltaY < 0) {
+    if (deltaX < 0 && deltaY < 0 && allowedDirections.includes("up-left")) {
       preferredDirections.push("up-left");
-    } else if (deltaX > 0 && deltaY < 0) {
+    } else if (deltaX > 0 && deltaY < 0 && allowedDirections.includes("up-right")) {
       preferredDirections.push("up-right");
-    } else if (deltaX < 0 && deltaY > 0) {
+    } else if (deltaX < 0 && deltaY > 0 && allowedDirections.includes("down-left")) {
       preferredDirections.push("down-left");
-    } else if (deltaX > 0 && deltaY > 0) {
+    } else if (deltaX > 0 && deltaY > 0 && allowedDirections.includes("down-right")) {
       preferredDirections.push("down-right");
     }
 
-    if (deltaY < 0) {
+    if (deltaY < 0 && allowedDirections.includes("up")) {
       preferredDirections.push("up");
-    } else if (deltaY > 0) {
+    } else if (deltaY > 0 && allowedDirections.includes("down")) {
       preferredDirections.push("down");
     }
 
-    if (deltaX < 0) {
+    if (deltaX < 0 && allowedDirections.includes("left")) {
       preferredDirections.push("left");
-    } else if (deltaX > 0) {
+    } else if (deltaX > 0 && allowedDirections.includes("right")) {
       preferredDirections.push("right");
     }
 
-    return [...preferredDirections, ...pathMoveDirections.filter((direction) => !preferredDirections.includes(direction))];
+    return [...preferredDirections, ...allowedDirections.filter((direction) => !preferredDirections.includes(direction))];
   }
 
   private reconstructPath(
@@ -908,7 +978,55 @@ export class MainScene extends Phaser.Scene {
     );
   }
 
+  private getTurnDirectionForMovementCode(code: string): CardinalDirection | null {
+    if (code === "ArrowUp" || code === "KeyW") {
+      return "north";
+    }
+
+    if (code === "ArrowDown" || code === "KeyS") {
+      return "south";
+    }
+
+    if (code === "ArrowLeft" || code === "KeyA") {
+      return "west";
+    }
+
+    if (code === "ArrowRight" || code === "KeyD") {
+      return "east";
+    }
+
+    return null;
+  }
+
+  private getPressedTurnDirection(): CardinalDirection | null {
+    if (this.pressedMovementCodes.has("ArrowUp") || this.pressedMovementCodes.has("KeyW")) {
+      return "north";
+    }
+
+    if (this.pressedMovementCodes.has("ArrowDown") || this.pressedMovementCodes.has("KeyS")) {
+      return "south";
+    }
+
+    if (this.pressedMovementCodes.has("ArrowLeft") || this.pressedMovementCodes.has("KeyA")) {
+      return "west";
+    }
+
+    if (this.pressedMovementCodes.has("ArrowRight") || this.pressedMovementCodes.has("KeyD")) {
+      return "east";
+    }
+
+    return null;
+  }
+
+  private emitTurnIntent(direction: CardinalDirection): void {
+    this.pressedMovementCodes.clear();
+    this.clickWalkTarget = null;
+    this.pendingAutoInteraction = null;
+    this.onTurnIntent?.(direction);
+  }
+
   private readonly clearMovementInput = (): void => {
+    this.isTurnModifierHeld = false;
     this.pressedMovementCodes.clear();
     this.clickWalkTarget = null;
     this.pendingAutoInteraction = null;
@@ -1122,9 +1240,8 @@ export class MainScene extends Phaser.Scene {
     existingView.label.setText(player.name);
     this.updatePlayerResourceBars(existingView, player);
     this.tweens.killTweensOf(existingView.container);
-    const nextDirection = this.inferFacingDirection(existingView.container, { x, y }, existingView.facing);
     const isMoving = existingView.container.x !== x || existingView.container.y !== y;
-    existingView.facing = nextDirection;
+    existingView.facing = player.facing;
     const nextOutfitTextureKey = this.getPlayerOutfitTextureKey(player);
 
     if (existingView.outfitTextureKey !== nextOutfitTextureKey) {
@@ -1176,9 +1293,9 @@ export class MainScene extends Phaser.Scene {
     const hud = this.add.container(0, 0, [label, healthBack, healthBar, manaBack, manaBar]);
     sprite.setOrigin(0.5, 1);
     sprite.setDisplaySize(34, 34);
-    this.playDirectionalAnimation(sprite, outfitTextureKey, "south", "idle");
+    this.playDirectionalAnimation(sprite, outfitTextureKey, player.facing, "idle");
     const view = {
-      facing: "south" as CardinalDirection,
+      facing: player.facing,
       container: this.add.container(x, y, [shadow, sprite, hud]),
       healthBack,
       healthBar,

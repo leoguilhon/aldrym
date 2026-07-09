@@ -12,6 +12,10 @@ This document defines the multiplayer world events used by the browser client an
   - Payload: `PlayerMoveRequest`
   - Shape: `{ direction: "up" | "down" | "left" | "right" | "up-left" | "up-right" | "down-left" | "down-right" }`
   - Purpose: Send movement intent only. The server computes the next position and validates collision.
+- `player:turn`
+  - Payload: `PlayerTurnRequest`
+  - Shape: `{ direction: "north" | "south" | "east" | "west" }`
+  - Purpose: Ask the server to rotate the character in place without changing tiles.
 - `combat:attack`
   - Payload: `AttackMonsterRequest`
   - Shape: `{ monsterId: string }`
@@ -86,7 +90,7 @@ This document defines the multiplayer world events used by the browser client an
 - `player:moved`
   - Payload: `PlayerMovedEvent`
   - Shape: `{ player: WorldPlayer }`
-  - Purpose: Broadcast authoritative movement results to all connected clients.
+  - Purpose: Broadcast authoritative player state updates such as movement, facing changes, and synced stat changes to all connected clients.
 - `player:left`
   - Payload: `PlayerLeftEvent`
   - Shape: `{ characterId: string }`

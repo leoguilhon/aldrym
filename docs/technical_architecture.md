@@ -31,6 +31,7 @@
 - The client opens a Socket.IO connection with the JWT token in the connection auth payload
 - `apps/server` authenticates sockets, verifies character ownership on `world:join`, and tracks online players in a small in-memory world state
 - Movement is intent-based: the client sends directions and the server calculates the next tile using the shared map rules
+- Player facing is server-authored as part of `WorldPlayer`; the client can also send an in-place turn intent without changing position
 - Movement pace is controlled by a shared level-based curve and enforced by the server before accepting the next tile step
 - The same shared local map definition is used for spawn clamping and blocked-tile validation on both the frontend and backend
 - Alive monsters occupy tiles and block player movement on the authoritative server

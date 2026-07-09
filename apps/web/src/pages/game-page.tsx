@@ -1,4 +1,5 @@
 import type {
+  CardinalDirection,
   CharacterDamagedEvent,
   CharacterSkillState,
   CharacterSummary,
@@ -602,6 +603,7 @@ function GameViewport({
   onMoveCorpse,
   onMoveGroundItem,
   onMoveIntent,
+  onTurnIntent,
   onOpenCorpse,
   onShowNotice,
   onTakeGroundItem,
@@ -622,6 +624,7 @@ function GameViewport({
   onMoveCorpse: (corpseId: string, position: Position) => void;
   onMoveGroundItem: (groundItemId: string, position: Position) => void;
   onMoveIntent: (direction: MoveDirection) => void;
+  onTurnIntent: (direction: CardinalDirection) => void;
   onOpenCorpse: (corpseId: string) => void;
   onShowNotice: (message: string) => void;
   onTakeGroundItem: (groundItemId: string) => void;
@@ -651,6 +654,7 @@ function GameViewport({
   const moveGroundItemRef = useRef(onMoveGroundItem);
   const moveCorpseRef = useRef(onMoveCorpse);
   const moveIntentRef = useRef(onMoveIntent);
+  const turnIntentRef = useRef(onTurnIntent);
   const openCorpseRef = useRef(onOpenCorpse);
   const playersRef = useRef(players);
   const showNoticeRef = useRef(onShowNotice);
@@ -713,6 +717,10 @@ function GameViewport({
   }, [onMoveIntent]);
 
   useEffect(() => {
+    turnIntentRef.current = onTurnIntent;
+  }, [onTurnIntent]);
+
+  useEffect(() => {
     openCorpseRef.current = onOpenCorpse;
   }, [onOpenCorpse]);
 
@@ -773,6 +781,7 @@ function GameViewport({
         onMoveCorpse: (corpseId, position) => moveCorpseRef.current(corpseId, position),
         onMoveGroundItem: (groundItemId, position) => moveGroundItemRef.current(groundItemId, position),
         onMoveIntent: (direction) => moveIntentRef.current(direction),
+        onTurnIntent: (direction) => turnIntentRef.current(direction),
         onOpenCorpse: (corpseId) => openCorpseRef.current(corpseId),
         onShowNotice: (message) => showNoticeRef.current(message),
         onTakeGroundItem: (groundItemId) => takeGroundItemRef.current(groundItemId),
@@ -1863,6 +1872,16 @@ export function GamePage() {
     socket.emit(worldEventNames.playerMove, { direction });
   };
 
+  const handleTurnIntent = (direction: CardinalDirection) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.playerTurn, { direction });
+  };
+
   const handleAttackMonster = (monsterId: string) => {
     const socket = socketRef.current;
 
@@ -2379,6 +2398,7 @@ export function GamePage() {
                 onMoveCorpse={handleMoveCorpse}
                 onMoveGroundItem={handleMoveGroundItem}
                 onMoveIntent={handleMoveIntent}
+                onTurnIntent={handleTurnIntent}
                 onOpenCorpse={handleOpenCorpse}
                 onShowNotice={setFeedbackMessage}
                 onTakeGroundItem={handleTakeGroundItem}

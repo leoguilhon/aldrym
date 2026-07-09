@@ -572,6 +572,9 @@ export interface LocalMapData {
   tiles: LocalTileType[][];
 }
 
+export const cardinalDirections = ["south", "north", "east", "west"] as const;
+export type CardinalDirection = (typeof cardinalDirections)[number];
+
 export const chaseModes = ["stand", "follow"] as const;
 export type ChaseMode = (typeof chaseModes)[number];
 
@@ -584,6 +587,7 @@ export interface WorldPlayer extends Position {
   maxHealth: number;
   mana: number;
   maxMana: number;
+  facing: CardinalDirection;
 }
 
 export type MonsterType = "rat" | "troll";
@@ -943,6 +947,10 @@ export interface PlayerMoveRequest {
   direction: MoveDirection;
 }
 
+export interface PlayerTurnRequest {
+  direction: CardinalDirection;
+}
+
 export interface AttackMonsterRequest {
   monsterId: string;
 }
@@ -1221,6 +1229,7 @@ export interface CombatErrorEvent {
 export interface WorldClientToServerEvents {
   "world:join": (payload: WorldJoinRequest) => void;
   "player:move": (payload: PlayerMoveRequest) => void;
+  "player:turn": (payload: PlayerTurnRequest) => void;
   "combat:attack": (payload: AttackMonsterRequest) => void;
   "combat:stop": (payload?: StopCombatRequest) => void;
   "combat:set-stance": (payload: SetCombatStanceRequest) => void;
@@ -1292,6 +1301,7 @@ export const worldEventNames = {
   worldGroundItems: "world:ground-items",
   worldError: "world:error",
   playerMove: "player:move",
+  playerTurn: "player:turn",
   playerMoved: "player:moved",
   playerJoined: "player:joined",
   playerLeft: "player:left",
@@ -1380,6 +1390,10 @@ function paintCells(tiles: LocalTileType[][], points: Array<{ x: number; y: numb
 
 export function isMoveDirection(value: string): value is MoveDirection {
   return moveDirections.includes(value as MoveDirection);
+}
+
+export function isCardinalDirection(value: string): value is CardinalDirection {
+  return cardinalDirections.includes(value as CardinalDirection);
 }
 
 export function isWithinMapBounds(map: LocalMapData, x: number, y: number): boolean {
@@ -1535,6 +1549,23 @@ export function getNextPosition(position: Position, direction: MoveDirection): P
       return { ...position, x: position.x + 1, y: position.y + 1 };
     default:
       return position;
+  }
+}
+
+export function getFacingDirectionForMoveDirection(direction: MoveDirection): CardinalDirection {
+  switch (direction) {
+    case "up":
+    case "up-left":
+    case "up-right":
+      return "north";
+    case "down":
+    case "down-left":
+    case "down-right":
+      return "south";
+    case "left":
+      return "west";
+    case "right":
+      return "east";
   }
 }
 

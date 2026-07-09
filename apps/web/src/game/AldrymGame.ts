@@ -1,4 +1,13 @@
-import type { Corpse, GroundItem, InventoryMoveTarget, MoveDirection, Position, WorldMonster, WorldPlayer } from "@aldrym/shared";
+import type {
+  CardinalDirection,
+  Corpse,
+  GroundItem,
+  InventoryMoveTarget,
+  MoveDirection,
+  Position,
+  WorldMonster,
+  WorldPlayer
+} from "@aldrym/shared";
 import Phaser from "phaser";
 
 import { createGameConfig } from "./config/gameConfig";
@@ -22,6 +31,7 @@ export interface AldrymGameOptions {
   onOpenCorpse?: (corpseId: string) => void;
   onShowNotice?: (message: string) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
+  onTurnIntent?: (direction: CardinalDirection) => void;
   parent: HTMLElement;
   players: WorldPlayer[];
 }
@@ -43,6 +53,7 @@ export class AldrymGame {
       onMoveCorpse: options.onMoveCorpse,
       onMoveGroundItem: options.onMoveGroundItem,
       onMoveIntent: options.onMoveIntent,
+      onTurnIntent: options.onTurnIntent,
       onOpenCorpse: options.onOpenCorpse,
       onShowNotice: options.onShowNotice,
       onTakeGroundItem: options.onTakeGroundItem,

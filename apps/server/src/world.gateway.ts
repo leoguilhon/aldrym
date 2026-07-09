@@ -1,5 +1,6 @@
 import type {
   AttackMonsterRequest,
+  CardinalDirection,
   CharacterDamagedEvent,
   CharacterExperienceUpdatedEvent,
   CharacterLevelUpEvent,
@@ -40,6 +41,7 @@ import type {
   PlayerLeftEvent,
   PlayerMoveRequest,
   PlayerMovedEvent,
+  PlayerTurnRequest,
   Position,
   SetCombatStanceRequest,
   SetChaseModeRequest,
@@ -58,10 +60,12 @@ import {
   combatStances,
   chaseModes,
   createLocalMap,
+  getFacingDirectionForMoveDirection,
   getRegenerationPerSecond,
   getMovementCooldownMs,
   getNextPosition,
   getTileType,
+  isCardinalDirection,
   isMoveDirection,
   isProtectionZone,
   isWalkableTile,
@@ -269,7 +273,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         maxHealth: character.maxHealth,
         mana: character.mana,
         maxMana: character.maxMana,
-        position
+        position,
+        facing: "south" as CardinalDirection
       };
 
       this.nextPlayerAttackAtBySocketId.delete(client.id);
@@ -363,7 +368,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
     this.nextPlayerMoveAtBySocketId.set(client.id, now + getMovementCooldownMs(activePlayer.level, direction));
 
-    const updatedPlayer = this.worldStateService.updatePlayerPosition(client.id, nextPosition);
+    const updatedPlayer = this.worldStateService.updatePlayerPosition(
+      client.id,
+      nextPosition,
+      getFacingDirectionForMoveDirection(direction)
+    );
 
     if (!updatedPlayer) {
       return;
@@ -380,6 +389,40 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     if (isProtectionZone(this.localMap, nextPosition)) {
       this.stopCombatSession(client, "target_lost");
     }
+  }
+
+  @SubscribeMessage(worldEventNames.playerTurn)
+  handlePlayerTurn(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: PlayerTurnRequest
+  ): void {
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!activePlayer) {
+      this.emitWorldError(client, "Join the world before turning.", "world_join_required");
+      return;
+    }
+
+    const direction = payload?.direction;
+
+    if (!direction || !isCardinalDirection(direction)) {
+      this.emitWorldError(client, "Turn direction is invalid.", "invalid_turn_direction");
+      return;
+    }
+
+    if (activePlayer.facing === direction) {
+      return;
+    }
+
+    const updatedPlayer = this.worldStateService.updatePlayerFacing(client.id, direction);
+
+    if (!updatedPlayer) {
+      return;
+    }
+
+    this.server.emit(worldEventNames.playerMoved, {
+      player: this.worldStateService.toWorldPlayer(updatedPlayer)
+    });
   }
 
   @SubscribeMessage(worldEventNames.combatAttack)
@@ -1637,8 +1680,18 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         continue;
       }
 
-      this.nextPlayerMoveAtBySocketId.set(socketId, now + getMovementCooldownMs(player.level));
-      const movedPlayer = this.worldStateService.updatePlayerPosition(socketId, nextPosition);
+      const moveDirection = this.getMoveDirectionBetween(player.position, nextPosition);
+
+      if (!moveDirection) {
+        continue;
+      }
+
+      this.nextPlayerMoveAtBySocketId.set(socketId, now + getMovementCooldownMs(player.level, moveDirection));
+      const movedPlayer = this.worldStateService.updatePlayerPosition(
+        socketId,
+        nextPosition,
+        getFacingDirectionForMoveDirection(moveDirection)
+      );
       if (movedPlayer) {
         this.server.emit(worldEventNames.playerMoved, {
           player: this.worldStateService.toWorldPlayer(movedPlayer)
@@ -2137,6 +2190,45 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       y: Math.round(y),
       z: Math.round(z)
     };
+  }
+
+  private getMoveDirectionBetween(from: Position, to: Position): PlayerMoveRequest["direction"] | null {
+    const deltaX = Math.sign(to.x - from.x);
+    const deltaY = Math.sign(to.y - from.y);
+
+    if (deltaX < 0 && deltaY < 0) {
+      return "up-left";
+    }
+
+    if (deltaX > 0 && deltaY < 0) {
+      return "up-right";
+    }
+
+    if (deltaX < 0 && deltaY > 0) {
+      return "down-left";
+    }
+
+    if (deltaX > 0 && deltaY > 0) {
+      return "down-right";
+    }
+
+    if (deltaY < 0) {
+      return "up";
+    }
+
+    if (deltaY > 0) {
+      return "down";
+    }
+
+    if (deltaX < 0) {
+      return "left";
+    }
+
+    if (deltaX > 0) {
+      return "right";
+    }
+
+    return null;
   }
 
   private isAdjacent(attacker: Position, target: Position): boolean {

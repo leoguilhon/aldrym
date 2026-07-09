@@ -1,4 +1,5 @@
 import type {
+  CardinalDirection,
   CharacterClass,
   Corpse,
   CorpseItem,
@@ -24,6 +25,7 @@ interface OnlineWorldPlayer {
   mana: number;
   maxMana: number;
   position: Position;
+  facing: CardinalDirection;
 }
 
 interface MonsterSpawn {
@@ -130,7 +132,7 @@ export class WorldStateService {
     return Array.from(this.playersBySocketId.values(), (player) => this.toWorldPlayer(player));
   }
 
-  updatePlayerPosition(socketId: string, position: Position): OnlineWorldPlayer | null {
+  updatePlayerPosition(socketId: string, position: Position, facing?: CardinalDirection): OnlineWorldPlayer | null {
     const player = this.playersBySocketId.get(socketId);
 
     if (!player) {
@@ -138,6 +140,22 @@ export class WorldStateService {
     }
 
     player.position = position;
+
+    if (facing) {
+      player.facing = facing;
+    }
+
+    return player;
+  }
+
+  updatePlayerFacing(socketId: string, facing: CardinalDirection): OnlineWorldPlayer | null {
+    const player = this.playersBySocketId.get(socketId);
+
+    if (!player) {
+      return null;
+    }
+
+    player.facing = facing;
     return player;
   }
 
@@ -506,6 +524,7 @@ export class WorldStateService {
       maxHealth: player.maxHealth,
       mana: player.mana,
       maxMana: player.maxMana,
+      facing: player.facing,
       x: player.position.x,
       y: player.position.y,
       z: player.position.z
