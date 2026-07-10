@@ -1653,7 +1653,9 @@ p {
 }
 
 .combat-stance-button svg,
-.combat-action-button svg {
+.combat-stance-button .combat-icon,
+.combat-action-button svg,
+.combat-action-button .combat-icon {
   width: 1.55rem;
   height: 1.55rem;
   fill: rgba(91, 56, 29, 0.18);
@@ -1661,6 +1663,7 @@ p {
   stroke-width: 1.7;
   stroke-linecap: round;
   stroke-linejoin: round;
+  image-rendering: pixelated;
 }
 
 .combat-stance-button--active {
@@ -1764,7 +1767,8 @@ p {
   cursor: pointer;
 }
 
-.compact-combat-button svg {
+.compact-combat-button svg,
+.compact-combat-button .combat-icon {
   width: 1rem;
   height: 1rem;
   fill: rgba(91, 56, 29, 0.14);
@@ -1772,6 +1776,7 @@ p {
   stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
+  image-rendering: pixelated;
 }
 
 .compact-combat-button--active {

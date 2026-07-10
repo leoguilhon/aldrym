@@ -399,24 +399,16 @@ function Dock({
 }
 
 function CombatIcon({ active = false, kind }: { active?: boolean; kind: CombatStance | ChaseMode | "pvp" }) {
-  if (kind === "defensive") {
-    return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2 20 5v6c0 5-3.4 9-8 11-4.6-2-8-6-8-11V5l8-3Z" /><path d="M12 5v13" /></svg>;
-  }
-  if (kind === "balanced") {
-    return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m4 19 3-3L16 4l3 3L7 16l-3 3Z" /><path d="m15 11 6 2v4c0 2.5-1.7 4.4-4 5.5-2.3-1.1-4-3-4-5.5v-2" /></svg>;
-  }
-  if (kind === "offensive") {
-    return <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m4 20 4-4L19 3l2 2L8 16l-4 4ZM20 20l-4-4L5 3 3 5l13 11 4 4Z" /></svg>;
-  }
-  if (kind === "follow") {
-    return <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="14" cy="5" r="2.2" /><path d="m12 8 4 2 3 4M12 8l-4 4-4 1m9-2-2 5-5 5m5-5 7 4" /></svg>;
-  }
-  if (kind === "stand") {
-    return <svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.2" /><path d="M12 8v7m-4-4 4-3 4 3m-4 4-4 7m4-7 4 7" /></svg>;
-  }
-  return active
-    ? <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M5 11V7a2 2 0 0 1 4 0v2-4a2 2 0 0 1 4 0v4-3a2 2 0 0 1 4 0v4-2a2 2 0 0 1 4 0v6c0 5-3 8-8 8s-8-3-8-8v-3Z" /></svg>
-    : <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M7 13V6a2 2 0 0 1 4 0v5-7a2 2 0 0 1 4 0v7-5a2 2 0 0 1 4 0v8c0 5-3 8-8 8-4 0-7-3-8-7l-1-4a2 2 0 0 1 4-1l1 3Z" /></svg>;
+  const iconByKind: Record<CombatStance | ChaseMode | "pvp", string> = {
+    balanced: "balanced.svg",
+    defensive: "defense.svg",
+    follow: "follow-attack.svg",
+    offensive: "full-attack.svg",
+    pvp: active ? "pvp-mode-active.svg" : "pvp-mode.svg",
+    stand: "stand-attack.svg"
+  };
+
+  return <img alt="" aria-hidden="true" className={active ? "combat-icon combat-icon--active" : "combat-icon"} src={`/assets/ui/${iconByKind[kind]}`} />;
 }
 
 function Minimap({

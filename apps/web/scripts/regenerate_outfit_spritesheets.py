@@ -71,6 +71,15 @@ def fit_frame(frame: Image.Image) -> Image.Image:
     return output
 
 
+def keep_sorcerer_hood_detail_on_right(frame: Image.Image) -> Image.Image:
+    """Keep the north-facing hood ornament on the same side while walking."""
+    corrected = frame.copy()
+    hood_box = (8, 6, 56, 38)
+    hood = corrected.crop(hood_box).transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+    corrected.paste(hood, hood_box)
+    return corrected
+
+
 def rebuild_outfit_sheet(outfit_name: str) -> None:
     source_path = SOURCE_DIR / f"{outfit_name}-directional-transparent.png"
     output_path = OUTPUT_DIR / f"{outfit_name}.png"
@@ -88,6 +97,8 @@ def rebuild_outfit_sheet(outfit_name: str) -> None:
         for column_index, (start_x, end_x) in enumerate(column_ranges):
             frame = source_image.crop((start_x, start_y, end_x + 1, end_y + 1))
             fitted_frame = fit_frame(frame)
+            if outfit_name == "sorcerer" and row_index == 1 and column_index in (1, 3):
+                fitted_frame = keep_sorcerer_hood_detail_on_right(fitted_frame)
             output_image.alpha_composite(fitted_frame, (column_index * FRAME_SIZE, row_index * FRAME_SIZE))
 
     output_image.save(output_path)
