@@ -3,6 +3,7 @@ import { ConflictException, Inject, Injectable, UnauthorizedException } from "@n
 import { JwtService } from "@nestjs/jwt";
 import { hash, compare } from "bcryptjs";
 
+import { PrismaService } from "../prisma/prisma.service";
 import { isPrismaUniqueConstraintError } from "../prisma/prisma-error.util";
 import { toAuthUser } from "../users/user.mapper";
 import { UsersService } from "../users/users.service";
@@ -14,6 +15,7 @@ import { RegisterDto } from "./dto/register.dto";
 export class AuthService {
   constructor(
     @Inject(UsersService) private readonly usersService: UsersService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(JwtService) private readonly jwtService: JwtService
   ) {}
 
@@ -62,7 +64,10 @@ export class AuthService {
       throw new UnauthorizedException("User not found");
     }
 
-    return toAuthUser(user);
+    return toAuthUser({
+      ...user,
+      activeWorldCharacterId: await this.findActiveWorldCharacterId(user.id)
+    });
   }
 
   async verifyAccessToken(token: string): Promise<AuthenticatedUser> {
@@ -107,8 +112,28 @@ export class AuthService {
 
     return {
       accessToken: await this.jwtService.signAsync(payload),
-      user: toAuthUser(user)
+      user: toAuthUser({
+        ...user,
+        activeWorldCharacterId: await this.findActiveWorldCharacterId(user.id)
+      })
     };
+  }
+
+  private async findActiveWorldCharacterId(userId: string): Promise<string | null> {
+    const character = await this.prisma.character.findFirst({
+      where: {
+        userId,
+        activeWorldSession: true
+      },
+      orderBy: {
+        updatedAt: "desc"
+      },
+      select: {
+        id: true
+      }
+    });
+
+    return character?.id ?? null;
   }
 
   private normalizeEmail(email: string): string {

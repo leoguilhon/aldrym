@@ -1155,6 +1155,25 @@ function ItemSlot({
   const target = getItemSlotDropTarget(item, location);
   const tooltip = item ? getItemTooltip(item) : label;
   const equipmentSlot = location.locationType === "equipment" ? location.equipmentSlot : null;
+  const handleItemPrimaryAction = () => {
+    if (!item) {
+      return;
+    }
+
+    if (isItemUsable(item)) {
+      onUseItem(item.id);
+      return;
+    }
+
+    if (item.isContainer) {
+      onOpenContainer(item.id);
+      return;
+    }
+
+    if (item.compatibleEquipmentSlots?.length) {
+      onQuickEquip(item.id);
+    }
+  };
 
   return (
     <div
@@ -1176,20 +1195,10 @@ function ItemSlot({
         }
 
         event.preventDefault();
-
-        if (isItemUsable(item)) {
-          onUseItem(item.id);
-          return;
-        }
-
-        if (item.isContainer) {
-          onOpenContainer(item.id);
-          return;
-        }
-
-        if (item.compatibleEquipmentSlots?.length) {
-          onQuickEquip(item.id);
-        }
+        handleItemPrimaryAction();
+      }}
+      onDoubleClick={() => {
+        handleItemPrimaryAction();
       }}
       onDragStart={(event) => {
         if (!item) {
@@ -1353,7 +1362,7 @@ function BackpackWindow({
 
 export function GamePage() {
   const { characterId } = useParams();
-  const { token } = useAuth();
+  const { setActiveWorldCharacterId, setCanReturnToCharacterHall, token } = useAuth();
   const draggedGroundItemIdRef = useRef<string | null>(null);
   const containerWorkspaceRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<Socket<WorldServerToClientEvents, WorldClientToServerEvents> | null>(null);
@@ -1464,6 +1473,7 @@ export function GamePage() {
 
     socket.on(worldEventNames.worldJoined, (payload) => {
       setConnectionState("joined");
+      setActiveWorldCharacterId(payload.player.characterId);
       setPlayers((currentPlayers) => upsertWorldPlayer(currentPlayers, payload.player));
     });
 
@@ -1726,6 +1736,7 @@ export function GamePage() {
       if (
         payload.code === "unauthenticated" ||
         payload.code === "invalid_character_id" ||
+        payload.code === "active_world_character_locked" ||
         payload.code === "character_already_online" ||
         payload.code === "world_join_failed"
       ) {
@@ -1784,6 +1795,7 @@ export function GamePage() {
 
   const localPlayer = character ? players.find((player) => player.characterId === character.id) ?? null : null;
   const localPosition = character ? localPlayer ?? resolveLocalPlayerSpawn(localMap, character) : null;
+  const isInBattleMode = localPlayer?.isInBattleMode ?? false;
   const isInProtectionZone = localPosition ? isProtectionZone(localMap, localPosition) : false;
   const currentLevelExperience = character ? getExperienceRequiredForLevel(character.level) : 0;
   const nextLevelExperience = character ? getExperienceRequiredForNextLevel(character.level) : 0;
@@ -1804,6 +1816,14 @@ export function GamePage() {
     })),
     ...(lootErrorMessage ? [{ id: "loot-error", type: "loot-error" as const }] : [])
   ];
+
+  useEffect(() => {
+    setCanReturnToCharacterHall(connectionState === "joined" && localPlayer !== null && !isInBattleMode);
+
+    return () => {
+      setCanReturnToCharacterHall(false);
+    };
+  }, [connectionState, isInBattleMode, localPlayer, setCanReturnToCharacterHall]);
   const containerWindowIds = containerWindowDescriptors.map((windowDescriptor) => windowDescriptor.id).join("|");
   const containerWorkspaceHeight = getContainerWorkspaceHeight(containerWindowDescriptors.length, containerWorkspaceWidth);
 
@@ -2320,6 +2340,11 @@ export function GamePage() {
             </dl>
             <div className="character-combat-bar">
               <div className="combat-status-bar" aria-label="Combat status">
+                {isInBattleMode ? (
+                  <span className="combat-status-badge" title="Battle mode">
+                    <img alt="Battle mode" src="/assets/ui/battle-mode.png" />
+                  </span>
+                ) : null}
                 {isInProtectionZone ? <span className="combat-status-badge" title="Protection zone"><img alt="Protection zone" src="/assets/ui/protection-zone.png" /></span> : null}
               </div>
               <div className="character-combat-buttons" role="group" aria-label="Combat controls">
@@ -2561,6 +2586,11 @@ export function GamePage() {
             </div>
           </dl>
           <div className="combat-status-bar" aria-label="Combat status">
+            {isInBattleMode ? (
+              <span className="combat-status-badge" title="Battle mode">
+                <img alt="Battle mode" src="/assets/ui/battle-mode.png" />
+              </span>
+            ) : null}
             {isInProtectionZone ? (
               <span className="combat-status-badge" title="Protection zone">
                 <img alt="Protection zone" src="/assets/ui/protection-zone.png" />

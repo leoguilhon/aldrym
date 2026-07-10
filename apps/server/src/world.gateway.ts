@@ -87,7 +87,7 @@ import { Server, Socket } from "socket.io";
 import type { AuthenticatedUser } from "./auth/authenticated-user.interface";
 import { AuthService } from "./auth/auth.service";
 import { CharactersService, InventoryFullError, InventoryValidationError } from "./characters/characters.service";
-import { WorldStateService } from "./world-state.service";
+import { type OnlineWorldPlayer, WorldStateService } from "./world-state.service";
 
 interface WorldSocketData {
   user?: AuthenticatedUser;
@@ -105,6 +105,7 @@ const MONSTER_THINK_INTERVAL_MS = 700;
 const PLAYER_ATTACK_INTERVAL_MS = 2000;
 const MONSTER_ATTACK_INTERVAL_MS = 2000;
 const PLAYER_REGENERATION_INTERVAL_MS = 1000;
+const BATTLE_MODE_DURATION_MS = 60000;
 const RESPAWN_WARNING_MS = 3000;
 const EMPTY_CORPSE_DECAY_MS = 15000;
 const ITEM_THROW_RANGE = 5;
@@ -185,34 +186,19 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   }
 
   async handleDisconnect(client: WorldSocket): Promise<void> {
-    this.stopCombatSession(client, "disconnected", false);
-    this.nextPlayerAttackAtBySocketId.delete(client.id);
-    this.nextPlayerMoveAtBySocketId.delete(client.id);
-    this.openedContainerIdsBySocketId.delete(client.id);
-    this.playerCombatStanceBySocketId.delete(client.id);
-    this.playerChaseModeBySocketId.delete(client.id);
-    this.playerPvpModeBySocketId.delete(client.id);
-    this.playerFoodExpiresAtBySocketId.delete(client.id);
-    this.playerHealthRegenCarryBySocketId.delete(client.id);
-    this.playerManaRegenCarryBySocketId.delete(client.id);
+    this.releaseSocketState(client.id, false);
 
-    const removedPlayer = this.worldStateService.removePlayer(client.id);
+    const disconnectedPlayer = this.worldStateService.disconnectPlayer(client.id);
 
-    if (!removedPlayer) {
+    if (!disconnectedPlayer) {
       return;
     }
 
-    await this.charactersService.savePositionForUserCharacter(
-      removedPlayer.userId,
-      removedPlayer.characterId,
-      removedPlayer.position
-    );
+    if (this.isPlayerInBattleMode(disconnectedPlayer)) {
+      return;
+    }
 
-    const payload: PlayerLeftEvent = {
-      characterId: removedPlayer.characterId
-    };
-
-    client.broadcast.emit(worldEventNames.playerLeft, payload);
+    await this.finalizeWorldLogout(disconnectedPlayer.characterId);
   }
 
   @SubscribeMessage(worldEventNames.worldJoin)
@@ -234,96 +220,76 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
-    const activeCharacter = this.worldStateService.getPlayerByCharacterId(characterId);
+    const activeWorldCharacterId = await this.charactersService.findActiveWorldCharacterIdForUser(user.id);
 
-    if (activeCharacter && activeCharacter.socketId !== client.id) {
-      this.emitWorldError(client, "That character is already online.", "character_already_online");
+    if (activeWorldCharacterId && activeWorldCharacterId !== characterId) {
+      this.emitWorldError(
+        client,
+        "You must return to your active world character before choosing another one.",
+        "active_world_character_locked"
+      );
       return;
     }
 
     const previousPlayer = this.worldStateService.getPlayerBySocketId(client.id);
 
-    if (previousPlayer) {
-      this.worldStateService.removePlayer(client.id);
-      this.nextPlayerAttackAtBySocketId.delete(client.id);
-      this.nextPlayerMoveAtBySocketId.delete(client.id);
-      this.openedContainerIdsBySocketId.delete(client.id);
-      await this.charactersService.savePositionForUserCharacter(
-        previousPlayer.userId,
-        previousPlayer.characterId,
-        previousPlayer.position
-      );
-
-      client.broadcast.emit(worldEventNames.playerLeft, {
-        characterId: previousPlayer.characterId
-      });
+    if (previousPlayer && previousPlayer.characterId !== characterId) {
+      await this.finalizeWorldLogout(previousPlayer.characterId);
     }
 
     try {
-      const character = await this.charactersService.findByIdForUser(user.id, characterId, "balanced");
-      const position = resolveLocalPlayerSpawn(this.localMap, character);
-      const onlinePlayer = {
-        socketId: client.id,
-        userId: user.id,
-        characterId: character.id,
-        characterClass: character.characterClass,
-        name: character.name,
-        level: character.level,
-        health: character.health,
-        maxHealth: character.maxHealth,
-        mana: character.mana,
-        maxMana: character.maxMana,
-        position,
-        facing: "south" as CardinalDirection
-      };
+      const activePlayer = this.worldStateService.getPlayerByCharacterId(characterId);
+      const stance = activePlayer?.combatStance ?? "balanced";
+      const character = await this.charactersService.findByIdForUser(user.id, characterId, stance);
+      let worldPlayerState: OnlineWorldPlayer;
+      let shouldBroadcastJoin = false;
 
-      this.nextPlayerAttackAtBySocketId.delete(client.id);
-      this.nextPlayerMoveAtBySocketId.delete(client.id);
-      this.playerCombatStanceBySocketId.set(client.id, "balanced");
-      this.playerChaseModeBySocketId.set(client.id, "stand");
-      this.playerPvpModeBySocketId.set(client.id, false);
-      this.playerFoodExpiresAtBySocketId.set(client.id, character.food.foodExpiresAt ? Date.parse(character.food.foodExpiresAt) : 0);
-      this.playerHealthRegenCarryBySocketId.set(client.id, 0);
-      this.playerManaRegenCarryBySocketId.set(client.id, 0);
-      this.worldStateService.addPlayer(onlinePlayer);
+      if (activePlayer) {
+        if (activePlayer.userId !== user.id) {
+          this.emitWorldError(client, "That character is already online.", "character_already_online");
+          return;
+        }
 
-      const worldPlayer = this.worldStateService.toWorldPlayer(onlinePlayer);
+        if (activePlayer.socketId && activePlayer.socketId !== client.id) {
+          const previousSocketId = activePlayer.socketId;
+          this.releaseSocketState(previousSocketId);
+          this.worldStateService.disconnectPlayer(previousSocketId);
+          const previousSocket = this.server.sockets.sockets.get(previousSocketId) as WorldSocket | undefined;
+          previousSocket?.disconnect(true);
+        }
 
-      const joinedPayload: WorldJoinedEvent = {
-        player: worldPlayer
-      };
-      const playersPayload: WorldPlayersEvent = {
-        players: this.worldStateService.listPlayers()
-      };
-      const monstersPayload: WorldMonstersEvent = {
-        monsters: this.worldStateService.listMonsters()
-      };
-      const corpsesPayload: WorldCorpsesEvent = {
-        corpses: this.worldStateService.listCorpses()
-      };
-      const groundItemsPayload: WorldGroundItemsEvent = {
-        groundItems: this.worldStateService.listGroundItems()
-      };
-      const inventoryPayload: InventoryUpdatedEvent = {
-        items: await this.charactersService.listInventoryForUserCharacter(user.id, character.id)
-      };
-      const equipmentPayload = {
-        slots: await this.charactersService.listEquipmentForUserCharacter(user.id, character.id)
-      };
+        worldPlayerState = this.worldStateService.connectPlayer(character.id, client.id) ?? activePlayer;
+      } else {
+        worldPlayerState = {
+          socketId: client.id,
+          connected: true,
+          userId: user.id,
+          characterId: character.id,
+          characterClass: character.characterClass,
+          name: character.name,
+          level: character.level,
+          health: character.health,
+          maxHealth: character.maxHealth,
+          mana: character.mana,
+          maxMana: character.maxMana,
+          position: resolveLocalPlayerSpawn(this.localMap, character),
+          facing: "south" as CardinalDirection,
+          combatStance: character.combatStats.stance,
+          battleModeExpiresAt: null
+        };
+        this.worldStateService.addPlayer(worldPlayerState);
+        shouldBroadcastJoin = true;
+      }
 
-      client.emit(worldEventNames.worldJoined, joinedPayload);
-      client.emit(worldEventNames.worldPlayers, playersPayload);
-      client.emit(worldEventNames.worldMonsters, monstersPayload);
-      client.emit(worldEventNames.worldCorpses, corpsesPayload);
-      client.emit(worldEventNames.worldGroundItems, groundItemsPayload);
-      client.emit(worldEventNames.inventoryUpdated, inventoryPayload);
-      client.emit(worldEventNames.equipmentUpdated, equipmentPayload);
-      client.emit(worldEventNames.characterUpdated, {
-        character
-      });
-      client.broadcast.emit(worldEventNames.playerJoined, {
-        player: worldPlayer
-      });
+      this.initializeSocketSessionState(client.id, character, worldPlayerState.combatStance);
+      await this.charactersService.activateWorldSessionForUserCharacter(user.id, character.id);
+      await this.emitWorldJoinState(client, user.id, character, worldPlayerState);
+
+      if (shouldBroadcastJoin) {
+        client.broadcast.emit(worldEventNames.playerJoined, {
+          player: this.worldStateService.toWorldPlayer(worldPlayerState)
+        });
+      }
     } catch (error) {
       this.logger.warn(`Failed world join for socket ${client.id}: ${error instanceof Error ? error.message : "unknown error"}`);
       this.emitWorldError(client, "Could not join the world with that character.", "world_join_failed");
@@ -387,6 +353,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     this.server.emit(worldEventNames.playerMoved, movedPayload);
 
     if (isProtectionZone(this.localMap, nextPosition)) {
+      this.clearPlayerBattleMode(activePlayer.characterId);
       this.stopCombatSession(client, "target_lost");
     }
   }
@@ -508,6 +475,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     this.playerCombatStanceBySocketId.set(client.id, stance);
+    this.worldStateService.updatePlayerCombatStance(activePlayer.characterId, stance);
     await this.emitCharacterState(client, user.id, activePlayer.characterId);
   }
 
@@ -1045,7 +1013,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         user.id,
         activePlayer.characterId,
         itemId,
-        this.getCombatStance(client.id)
+        activePlayer.combatStance
       );
 
       await this.emitInventoryState(client, user.id, activePlayer.characterId, result.message, result.character);
@@ -1364,21 +1332,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     reason: CombatStoppedEvent["reason"],
     notify = true
   ): void {
-    const session = this.combatSessions.get(client.id);
-
-    if (!session) {
-      return;
-    }
-
-    clearInterval(session.playerAttackTimer);
-    this.combatSessions.delete(client.id);
-
-    if (notify) {
-      client.emit(worldEventNames.combatStopped, {
-        monsterId: session.monsterId,
-        reason
-      });
-    }
+    this.stopCombatSessionBySocketId(client.id, reason, notify);
   }
 
   private async performPlayerAttack(client: WorldSocket, monsterId: string): Promise<void> {
@@ -1418,7 +1372,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     this.nextPlayerAttackAtBySocketId.set(client.id, now + PLAYER_ATTACK_INTERVAL_MS);
-    const stance = this.getCombatStance(client.id);
+    this.startOrRefreshBattleMode(activePlayer.characterId);
+    const stance = activePlayer.combatStance;
     const character = await this.charactersService.findByIdForUser(user.id, activePlayer.characterId, stance);
     const rawDamage = this.rollDamage(0, Math.max(0, character.combatStats.attackValue * 2));
     const armorReduction = this.rollArmorReduction(monster.armor, rawDamage);
@@ -1617,6 +1572,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         continue;
       }
 
+      this.startOrRefreshBattleMode(target.characterId);
+
       const isRetreating = monster.retreatAtHealth !== null && monster.health <= monster.retreatAtHealth;
 
       if (this.isAdjacent(monster, target) && !isRetreating) {
@@ -1736,11 +1693,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
-    const client = this.server.sockets.sockets.get(activePlayer.socketId) as WorldSocket | undefined;
-
-    if (!client) {
-      return;
-    }
+    this.startOrRefreshBattleMode(activePlayer.characterId);
+    const client =
+      activePlayer.socketId
+        ? (this.server.sockets.sockets.get(activePlayer.socketId) as WorldSocket | undefined)
+        : undefined;
 
     const now = Date.now();
     const nextAttackAt = this.nextMonsterAttackAtByMonsterId.get(monster.id) ?? 0;
@@ -1751,7 +1708,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
     this.nextMonsterAttackAtByMonsterId.set(monster.id, now + MONSTER_ATTACK_INTERVAL_MS);
 
-    const stance = this.getCombatStance(activePlayer.socketId);
+    const stance = activePlayer.combatStance;
     const character = await this.charactersService.findByIdForUser(activePlayer.userId, activePlayer.characterId, stance);
     const rawDamage = this.rollDamage(1, monster.maxDamage);
     const defenseReduction = this.rollDefenseReduction(character.combatStats.defenseValue);
@@ -1772,7 +1729,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
     if (damage <= 0) {
       if (updatedCharacter) {
-        await this.emitCharacterState(client, activePlayer.userId, activePlayer.characterId, updatedCharacter);
+        if (client) {
+          await this.emitCharacterState(client, activePlayer.userId, activePlayer.characterId, updatedCharacter);
+        } else {
+          this.syncWorldPlayerState(activePlayer.characterId, updatedCharacter);
+        }
       }
       return;
     }
@@ -1784,16 +1745,22 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       stance
     );
 
-    client.emit(worldEventNames.characterDamaged, {
-      characterId: updatedCharacter.id,
-      damage,
-      health: updatedCharacter.health,
-      maxHealth: updatedCharacter.maxHealth
-    } satisfies CharacterDamagedEvent);
-    await this.emitCharacterState(client, activePlayer.userId, activePlayer.characterId, updatedCharacter);
+    if (client) {
+      client.emit(worldEventNames.characterDamaged, {
+        characterId: updatedCharacter.id,
+        damage,
+        health: updatedCharacter.health,
+        maxHealth: updatedCharacter.maxHealth
+      } satisfies CharacterDamagedEvent);
+      await this.emitCharacterState(client, activePlayer.userId, activePlayer.characterId, updatedCharacter);
+      return;
+    }
+
+    this.syncWorldPlayerState(activePlayer.characterId, updatedCharacter);
   }
 
   private async performPlayerRegenerationTick(): Promise<void> {
+    await this.processBattleModeExpirations();
     const now = Date.now();
 
     for (const socket of this.server.sockets.sockets.values()) {
@@ -1834,7 +1801,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
           health: healthGain,
           mana: manaGain
         },
-        this.getCombatStance(client.id)
+        activePlayer.combatStance
       );
 
       await this.emitCharacterState(client, activePlayer.userId, activePlayer.characterId, updatedCharacter);
@@ -1983,6 +1950,184 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     client.emit(worldEventNames.corpseError, payload);
   }
 
+  private stopCombatSessionBySocketId(
+    socketId: string,
+    reason: CombatStoppedEvent["reason"],
+    notify = true
+  ): void {
+    const session = this.combatSessions.get(socketId);
+
+    if (!session) {
+      return;
+    }
+
+    clearInterval(session.playerAttackTimer);
+    this.combatSessions.delete(socketId);
+
+    if (!notify) {
+      return;
+    }
+
+    const client = this.server.sockets.sockets.get(socketId) as WorldSocket | undefined;
+
+    client?.emit(worldEventNames.combatStopped, {
+      monsterId: session.monsterId,
+      reason
+    });
+  }
+
+  private releaseSocketState(socketId: string, notifyCombatStop = false): void {
+    this.stopCombatSessionBySocketId(socketId, "disconnected", notifyCombatStop);
+    this.nextPlayerAttackAtBySocketId.delete(socketId);
+    this.nextPlayerMoveAtBySocketId.delete(socketId);
+    this.openedContainerIdsBySocketId.delete(socketId);
+    this.playerCombatStanceBySocketId.delete(socketId);
+    this.playerChaseModeBySocketId.delete(socketId);
+    this.playerPvpModeBySocketId.delete(socketId);
+    this.playerFoodExpiresAtBySocketId.delete(socketId);
+    this.playerHealthRegenCarryBySocketId.delete(socketId);
+    this.playerManaRegenCarryBySocketId.delete(socketId);
+  }
+
+  private initializeSocketSessionState(socketId: string, character: CharacterSummary, combatStance: CombatStance): void {
+    this.nextPlayerAttackAtBySocketId.delete(socketId);
+    this.nextPlayerMoveAtBySocketId.delete(socketId);
+    this.playerCombatStanceBySocketId.set(socketId, combatStance);
+    this.playerChaseModeBySocketId.set(socketId, "stand");
+    this.playerPvpModeBySocketId.set(socketId, false);
+    this.playerFoodExpiresAtBySocketId.set(socketId, character.food.foodExpiresAt ? Date.parse(character.food.foodExpiresAt) : 0);
+    this.playerHealthRegenCarryBySocketId.set(socketId, 0);
+    this.playerManaRegenCarryBySocketId.set(socketId, 0);
+  }
+
+  private async emitWorldJoinState(
+    client: WorldSocket,
+    userId: string,
+    character: CharacterSummary,
+    player: OnlineWorldPlayer
+  ): Promise<void> {
+    const joinedPayload: WorldJoinedEvent = {
+      player: this.worldStateService.toWorldPlayer(player)
+    };
+    const playersPayload: WorldPlayersEvent = {
+      players: this.worldStateService.listPlayers()
+    };
+    const monstersPayload: WorldMonstersEvent = {
+      monsters: this.worldStateService.listMonsters()
+    };
+    const corpsesPayload: WorldCorpsesEvent = {
+      corpses: this.worldStateService.listCorpses()
+    };
+    const groundItemsPayload: WorldGroundItemsEvent = {
+      groundItems: this.worldStateService.listGroundItems()
+    };
+    const inventoryPayload: InventoryUpdatedEvent = {
+      items: await this.charactersService.listInventoryForUserCharacter(userId, character.id)
+    };
+    const equipmentPayload = {
+      slots: await this.charactersService.listEquipmentForUserCharacter(userId, character.id)
+    };
+
+    client.emit(worldEventNames.worldJoined, joinedPayload);
+    client.emit(worldEventNames.worldPlayers, playersPayload);
+    client.emit(worldEventNames.worldMonsters, monstersPayload);
+    client.emit(worldEventNames.worldCorpses, corpsesPayload);
+    client.emit(worldEventNames.worldGroundItems, groundItemsPayload);
+    client.emit(worldEventNames.inventoryUpdated, inventoryPayload);
+    client.emit(worldEventNames.equipmentUpdated, equipmentPayload);
+    client.emit(worldEventNames.characterUpdated, {
+      character
+    });
+  }
+
+  private isPlayerInBattleMode(player: OnlineWorldPlayer): boolean {
+    return player.battleModeExpiresAt !== null && player.battleModeExpiresAt > Date.now();
+  }
+
+  private startOrRefreshBattleMode(characterId: string): void {
+    const player = this.worldStateService.getPlayerByCharacterId(characterId);
+
+    if (!player) {
+      return;
+    }
+
+    const wasInBattleMode = this.isPlayerInBattleMode(player);
+    const updatedPlayer = this.worldStateService.updatePlayerBattleMode(characterId, Date.now() + BATTLE_MODE_DURATION_MS);
+
+    if (updatedPlayer && !wasInBattleMode) {
+      this.server.emit(worldEventNames.playerMoved, {
+        player: this.worldStateService.toWorldPlayer(updatedPlayer)
+      });
+    }
+  }
+
+  private clearPlayerBattleMode(characterId: string): void {
+    const player = this.worldStateService.getPlayerByCharacterId(characterId);
+
+    if (!player || !this.isPlayerInBattleMode(player)) {
+      return;
+    }
+
+    const updatedPlayer = this.worldStateService.updatePlayerBattleMode(characterId, null);
+
+    if (updatedPlayer) {
+      this.server.emit(worldEventNames.playerMoved, {
+        player: this.worldStateService.toWorldPlayer(updatedPlayer)
+      });
+    }
+  }
+
+  private async processBattleModeExpirations(): Promise<void> {
+    const now = Date.now();
+
+    for (const player of this.worldStateService.listPlayerStates()) {
+      if (player.battleModeExpiresAt === null || player.battleModeExpiresAt > now) {
+        continue;
+      }
+
+      if (!player.connected) {
+        await this.finalizeWorldLogout(player.characterId);
+        continue;
+      }
+
+      const updatedPlayer = this.worldStateService.updatePlayerBattleMode(player.characterId, null);
+
+      if (updatedPlayer) {
+        this.server.emit(worldEventNames.playerMoved, {
+          player: this.worldStateService.toWorldPlayer(updatedPlayer)
+        });
+      }
+    }
+  }
+
+  private async finalizeWorldLogout(characterId: string): Promise<void> {
+    const player = this.worldStateService.getPlayerByCharacterId(characterId);
+
+    if (!player) {
+      return;
+    }
+
+    if (player.socketId) {
+      this.releaseSocketState(player.socketId);
+    }
+
+    const removedPlayer = this.worldStateService.removePlayerByCharacterId(characterId);
+
+    if (!removedPlayer) {
+      return;
+    }
+
+    await this.charactersService.finalizeWorldSessionForUserCharacter(
+      removedPlayer.userId,
+      removedPlayer.characterId,
+      removedPlayer.position
+    );
+
+    this.server.emit(worldEventNames.playerLeft, {
+      characterId: removedPlayer.characterId
+    } satisfies PlayerLeftEvent);
+  }
+
   private async emitInventoryState(
     client: WorldSocket,
     userId: string,
@@ -2009,8 +2154,14 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     characterId: string,
     character?: CharacterSummary
   ): Promise<CharacterSummary> {
-    const nextCharacter = character ?? (await this.charactersService.findByIdForUser(userId, characterId, this.getCombatStance(client.id)));
-    this.syncWorldPlayerState(client.id, nextCharacter);
+    const nextCharacter =
+      character ??
+      (await this.charactersService.findByIdForUser(
+        userId,
+        characterId,
+        this.worldStateService.getPlayerByCharacterId(characterId)?.combatStance ?? this.getCombatStance(client.id)
+      ));
+    this.syncWorldPlayerState(characterId, nextCharacter);
     this.playerFoodExpiresAtBySocketId.set(client.id, nextCharacter.food.foodExpiresAt ? Date.parse(nextCharacter.food.foodExpiresAt) : 0);
 
     client.emit(worldEventNames.characterUpdated, {
@@ -2027,8 +2178,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     return nextCharacter;
   }
 
-  private syncWorldPlayerState(socketId: string, character: CharacterSummary): void {
-    const updatedWorldPlayer = this.worldStateService.updatePlayerStats(socketId, {
+  private syncWorldPlayerState(characterId: string, character: CharacterSummary): void {
+    const updatedWorldPlayer = this.worldStateService.updatePlayerStatsByCharacterId(characterId, {
       level: character.level,
       health: character.health,
       maxHealth: character.maxHealth,

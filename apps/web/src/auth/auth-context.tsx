@@ -19,10 +19,15 @@ interface AuthContextValue {
   readonly isLoading: boolean;
   readonly token: string | null;
   readonly user: AuthUser | null;
-  login: (payload: LoginRequest) => Promise<void>;
-  register: (payload: RegisterRequest) => Promise<void>;
+  readonly activeWorldCharacterId: string | null;
+  readonly canReturnToCharacterHall: boolean;
+  login: (payload: LoginRequest) => Promise<AuthUser>;
+  register: (payload: RegisterRequest) => Promise<AuthUser>;
   logout: () => void;
   loadCurrentUser: () => Promise<void>;
+  setActiveWorldCharacterId: (characterId: string | null) => void;
+  setCanReturnToCharacterHall: (value: boolean) => void;
+  releaseActiveWorldCharacter: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -36,12 +41,14 @@ function storeSession(response: AuthResponse, setToken: (token: string) => void,
 export function AuthProvider({ children }: PropsWithChildren) {
   const [token, setToken] = useState<string | null>(() => readStoredAccessToken());
   const [user, setUser] = useState<AuthUser | null>(null);
+  const [canReturnToCharacterHall, setCanReturnToCharacterHall] = useState(false);
   const [isLoading, setIsLoading] = useState<boolean>(() => readStoredAccessToken() !== null);
 
   const clearSession = () => {
     clearStoredAccessToken();
     setToken(null);
     setUser(null);
+    setCanReturnToCharacterHall(false);
   };
 
   const loadCurrentUser = async () => {
@@ -71,16 +78,34 @@ export function AuthProvider({ children }: PropsWithChildren) {
   const login = async (payload: LoginRequest) => {
     const response = await loginAccount(payload);
     storeSession(response, setToken, setUser);
+    return response.user;
   };
 
   const register = async (payload: RegisterRequest) => {
     const response = await registerAccount(payload);
     storeSession(response, setToken, setUser);
+    return response.user;
   };
 
   const logout = () => {
     clearSession();
     setIsLoading(false);
+  };
+
+  const setActiveWorldCharacterId = (characterId: string | null) => {
+    setUser((currentUser) =>
+      currentUser
+        ? {
+            ...currentUser,
+            activeWorldCharacterId: characterId
+          }
+        : currentUser
+    );
+  };
+
+  const releaseActiveWorldCharacter = () => {
+    setActiveWorldCharacterId(null);
+    setCanReturnToCharacterHall(false);
   };
 
   useEffect(() => {
@@ -124,17 +149,22 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
   return (
     <AuthContext.Provider
-      value={{
-        isAuthenticated: token !== null && user !== null,
-        isLoading,
-        token,
-        user,
-        login,
-        register,
-        logout,
-        loadCurrentUser
-      }}
-    >
+        value={{
+          isAuthenticated: token !== null && user !== null,
+          isLoading,
+          token,
+          user,
+          activeWorldCharacterId: user?.activeWorldCharacterId ?? null,
+          canReturnToCharacterHall,
+          login,
+          register,
+          logout,
+          loadCurrentUser,
+          setActiveWorldCharacterId,
+          setCanReturnToCharacterHall,
+          releaseActiveWorldCharacter
+        }}
+      >
       {children}
     </AuthContext.Provider>
   );

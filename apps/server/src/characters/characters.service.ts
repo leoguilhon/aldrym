@@ -453,12 +453,17 @@ export class CharactersService {
         userId
       },
       select: {
-        id: true
+        id: true,
+        activeWorldSession: true
       }
     });
 
     if (!character) {
       throw new NotFoundException("Character not found");
+    }
+
+    if (character.activeWorldSession) {
+      throw new ConflictException("An active world character cannot be deleted");
     }
 
     await this.prisma.character.delete({
@@ -480,6 +485,73 @@ export class CharactersService {
         z: position.z
       }
     });
+  }
+
+  async activateWorldSessionForUserCharacter(userId: string, characterId: string): Promise<void> {
+    const character = await this.findCharacterIdentityForUser(userId, characterId);
+
+    await this.prisma.$transaction([
+      this.prisma.character.updateMany({
+        where: {
+          userId,
+          id: {
+            not: character.id
+          }
+        },
+        data: {
+          activeWorldSession: false
+        }
+      }),
+      this.prisma.character.updateMany({
+        where: {
+          id: character.id,
+          userId
+        },
+        data: {
+          activeWorldSession: true
+        }
+      })
+    ]);
+  }
+
+  async finalizeWorldSessionForUserCharacter(userId: string, characterId: string, position: Position): Promise<void> {
+    await this.prisma.character.updateMany({
+      where: {
+        id: characterId,
+        userId
+      },
+      data: {
+        activeWorldSession: false,
+        x: position.x,
+        y: position.y,
+        z: position.z
+      }
+    });
+  }
+
+  async clearAllWorldSessions(): Promise<void> {
+    await this.prisma.character.updateMany({
+      data: {
+        activeWorldSession: false
+      }
+    });
+  }
+
+  async findActiveWorldCharacterIdForUser(userId: string): Promise<string | null> {
+    const character = await this.prisma.character.findFirst({
+      where: {
+        userId,
+        activeWorldSession: true
+      },
+      orderBy: {
+        updatedAt: "desc"
+      },
+      select: {
+        id: true
+      }
+    });
+
+    return character?.id ?? null;
   }
 
   async addExperienceForUserCharacter(
@@ -1212,14 +1284,18 @@ export class CharactersService {
     }
   }
 
-  private async findCharacterIdentityForUser(userId: string, characterId: string): Promise<{ id: string }> {
+  private async findCharacterIdentityForUser(
+    userId: string,
+    characterId: string
+  ): Promise<{ id: string; activeWorldSession: boolean }> {
     const character = await this.prisma.character.findFirst({
       where: {
         id: characterId,
         userId
       },
       select: {
-        id: true
+        id: true,
+        activeWorldSession: true
       }
     });
 

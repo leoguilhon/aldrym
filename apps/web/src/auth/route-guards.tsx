@@ -2,6 +2,10 @@ import { Navigate, Outlet } from "react-router-dom";
 
 import { useAuth } from "./auth-context";
 
+export function getAuthenticatedEntryPath(activeWorldCharacterId: string | null): string {
+  return activeWorldCharacterId ? `/game/${activeWorldCharacterId}` : "/characters";
+}
+
 export function ProtectedRoute() {
   const { isAuthenticated } = useAuth();
 
@@ -13,10 +17,10 @@ export function ProtectedRoute() {
 }
 
 export function PublicOnlyRoute() {
-  const { isAuthenticated } = useAuth();
+  const { activeWorldCharacterId, isAuthenticated } = useAuth();
 
   if (isAuthenticated) {
-    return <Navigate replace to="/characters" />;
+    return <Navigate replace to={getAuthenticatedEntryPath(activeWorldCharacterId)} />;
   }
 
   return <Outlet />;

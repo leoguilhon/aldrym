@@ -1,6 +1,7 @@
 import type {
   CardinalDirection,
   CharacterClass,
+  CombatStance,
   Corpse,
   CorpseItem,
   GroundItem,
@@ -13,8 +14,9 @@ import type {
 import { itemDefinitions } from "@aldrym/shared";
 import { Injectable } from "@nestjs/common";
 
-interface OnlineWorldPlayer {
-  socketId: string;
+export interface OnlineWorldPlayer {
+  socketId: string | null;
+  connected: boolean;
   userId: string;
   characterId: string;
   characterClass: CharacterClass;
@@ -26,6 +28,8 @@ interface OnlineWorldPlayer {
   maxMana: number;
   position: Position;
   facing: CardinalDirection;
+  combatStance: CombatStance;
+  battleModeExpiresAt: number | null;
 }
 
 interface MonsterSpawn {
@@ -89,7 +93,8 @@ const initialMonsterSpawns: MonsterSpawn[] = [
 
 @Injectable()
 export class WorldStateService {
-  private readonly playersBySocketId = new Map<string, OnlineWorldPlayer>();
+  private readonly playersByCharacterId = new Map<string, OnlineWorldPlayer>();
+  private readonly characterIdBySocketId = new Map<string, string>();
   private readonly corpsesById = new Map<string, Corpse>();
   private readonly groundItemsById = new Map<string, GroundItem>();
   private nextCorpseId = 1;
@@ -111,29 +116,32 @@ export class WorldStateService {
   );
 
   addPlayer(player: OnlineWorldPlayer): void {
-    this.playersBySocketId.set(player.socketId, player);
+    this.playersByCharacterId.set(player.characterId, player);
+
+    if (player.socketId) {
+      this.characterIdBySocketId.set(player.socketId, player.characterId);
+    }
   }
 
   getPlayerBySocketId(socketId: string): OnlineWorldPlayer | null {
-    return this.playersBySocketId.get(socketId) ?? null;
+    const characterId = this.characterIdBySocketId.get(socketId);
+    return characterId ? this.playersByCharacterId.get(characterId) ?? null : null;
   }
 
   getPlayerByCharacterId(characterId: string): OnlineWorldPlayer | null {
-    for (const player of this.playersBySocketId.values()) {
-      if (player.characterId === characterId) {
-        return player;
-      }
-    }
-
-    return null;
+    return this.playersByCharacterId.get(characterId) ?? null;
   }
 
   listPlayers(): WorldPlayer[] {
-    return Array.from(this.playersBySocketId.values(), (player) => this.toWorldPlayer(player));
+    return Array.from(this.playersByCharacterId.values(), (player) => this.toWorldPlayer(player));
+  }
+
+  listPlayerStates(): OnlineWorldPlayer[] {
+    return Array.from(this.playersByCharacterId.values());
   }
 
   updatePlayerPosition(socketId: string, position: Position, facing?: CardinalDirection): OnlineWorldPlayer | null {
-    const player = this.playersBySocketId.get(socketId);
+    const player = this.getPlayerBySocketId(socketId);
 
     if (!player) {
       return null;
@@ -149,7 +157,7 @@ export class WorldStateService {
   }
 
   updatePlayerFacing(socketId: string, facing: CardinalDirection): OnlineWorldPlayer | null {
-    const player = this.playersBySocketId.get(socketId);
+    const player = this.getPlayerBySocketId(socketId);
 
     if (!player) {
       return null;
@@ -163,7 +171,7 @@ export class WorldStateService {
     socketId: string,
     stats: Pick<WorldPlayer, "level" | "health" | "maxHealth" | "mana" | "maxMana">
   ): OnlineWorldPlayer | null {
-    const player = this.playersBySocketId.get(socketId);
+    const player = this.getPlayerBySocketId(socketId);
 
     if (!player) {
       return null;
@@ -174,6 +182,80 @@ export class WorldStateService {
     player.maxHealth = stats.maxHealth;
     player.mana = stats.mana;
     player.maxMana = stats.maxMana;
+    return player;
+  }
+
+  updatePlayerStatsByCharacterId(
+    characterId: string,
+    stats: Pick<WorldPlayer, "level" | "health" | "maxHealth" | "mana" | "maxMana">
+  ): OnlineWorldPlayer | null {
+    const player = this.getPlayerByCharacterId(characterId);
+
+    if (!player) {
+      return null;
+    }
+
+    player.level = stats.level;
+    player.health = stats.health;
+    player.maxHealth = stats.maxHealth;
+    player.mana = stats.mana;
+    player.maxMana = stats.maxMana;
+    return player;
+  }
+
+  updatePlayerCombatStance(characterId: string, combatStance: CombatStance): OnlineWorldPlayer | null {
+    const player = this.getPlayerByCharacterId(characterId);
+
+    if (!player) {
+      return null;
+    }
+
+    player.combatStance = combatStance;
+    return player;
+  }
+
+  updatePlayerBattleMode(characterId: string, battleModeExpiresAt: number | null): OnlineWorldPlayer | null {
+    const player = this.getPlayerByCharacterId(characterId);
+
+    if (!player) {
+      return null;
+    }
+
+    player.battleModeExpiresAt = battleModeExpiresAt;
+    return player;
+  }
+
+  connectPlayer(characterId: string, socketId: string): OnlineWorldPlayer | null {
+    const player = this.getPlayerByCharacterId(characterId);
+
+    if (!player) {
+      return null;
+    }
+
+    if (player.socketId && player.socketId !== socketId) {
+      this.characterIdBySocketId.delete(player.socketId);
+    }
+
+    player.socketId = socketId;
+    player.connected = true;
+    this.characterIdBySocketId.set(socketId, characterId);
+    return player;
+  }
+
+  disconnectPlayer(socketId: string): OnlineWorldPlayer | null {
+    const player = this.getPlayerBySocketId(socketId);
+
+    if (!player) {
+      return null;
+    }
+
+    this.characterIdBySocketId.delete(socketId);
+
+    if (player.socketId === socketId) {
+      player.socketId = null;
+      player.connected = false;
+    }
+
     return player;
   }
 
@@ -463,8 +545,8 @@ export class WorldStateService {
   }
 
   isPlayerAt(position: Position, ignoredSocketId?: string): boolean {
-    for (const player of this.playersBySocketId.values()) {
-      if (player.socketId === ignoredSocketId) {
+    for (const player of this.playersByCharacterId.values()) {
+      if (ignoredSocketId && player.socketId === ignoredSocketId) {
         continue;
       }
 
@@ -505,10 +587,25 @@ export class WorldStateService {
   }
 
   removePlayer(socketId: string): OnlineWorldPlayer | null {
-    const player = this.playersBySocketId.get(socketId) ?? null;
+    const player = this.getPlayerBySocketId(socketId);
 
     if (player) {
-      this.playersBySocketId.delete(socketId);
+      this.characterIdBySocketId.delete(socketId);
+      this.playersByCharacterId.delete(player.characterId);
+    }
+
+    return player;
+  }
+
+  removePlayerByCharacterId(characterId: string): OnlineWorldPlayer | null {
+    const player = this.playersByCharacterId.get(characterId) ?? null;
+
+    if (player) {
+      if (player.socketId) {
+        this.characterIdBySocketId.delete(player.socketId);
+      }
+
+      this.playersByCharacterId.delete(characterId);
     }
 
     return player;
@@ -525,6 +622,7 @@ export class WorldStateService {
       mana: player.mana,
       maxMana: player.maxMana,
       facing: player.facing,
+      isInBattleMode: player.battleModeExpiresAt !== null && player.battleModeExpiresAt > Date.now(),
       x: player.position.x,
       y: player.position.y,
       z: player.position.z

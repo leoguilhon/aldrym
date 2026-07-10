@@ -272,6 +272,14 @@ p {
   color: #fff5de;
 }
 
+.nav-link--disabled,
+.nav-link--disabled:hover {
+  border-color: rgba(210, 172, 103, 0.18);
+  background: rgba(0, 0, 0, 0.12);
+  color: rgba(245, 231, 201, 0.46);
+  cursor: not-allowed;
+}
+
 .account-box {
   border: 1px solid rgba(211, 178, 117, 0.2);
   border-radius: 1rem;

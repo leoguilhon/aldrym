@@ -30,12 +30,14 @@
 - `apps/web` mounts the Phaser client at `/game/:characterId` after the selected character is verified through the authenticated REST API
 - The client opens a Socket.IO connection with the JWT token in the connection auth payload
 - `apps/server` authenticates sockets, verifies character ownership on `world:join`, and tracks online players in a small in-memory world state
+- The authoritative world session now has two layers: live player position, combat lock, and monster contact stay in memory, while a persisted `Character.activeWorldSession` flag prevents the same account from selecting a second character until the active world session ends
 - Movement is intent-based: the client sends directions and the server calculates the next tile using the shared map rules
 - Player facing is server-authored as part of `WorldPlayer`; the client can also send an in-place turn intent without changing position
 - Movement pace is controlled by a shared level-based curve and enforced by the server before accepting the next tile step
 - The same shared local map definition is used for spawn clamping and blocked-tile validation on both the frontend and backend
 - Alive monsters occupy tiles and block player movement on the authoritative server
-- Character position is saved to PostgreSQL only when a joined socket disconnects
+- Character position is saved to PostgreSQL only when a world session is finalized; normal step-by-step movement stays in server memory
+- If a character disconnects while under monster battle lock, the character stays immobile in the in-memory world until the 60-second battle timer expires or the character re-enters a protection zone; only then is the world session finalized and the last position written back to PostgreSQL
 - On world join, the gateway sends current online players and the current monster list to the client
 - On world join, the gateway sends current in-memory corpses, current in-memory ground items, the selected character's persisted equipment slots, the contents of the equipped backpack, and a derived `character:updated` summary containing skills, food state, and combat stats.
 - Combat is session-based: the client sends only a targeted visible monster id or stop intent, and the server owns the auto-attack loop
@@ -60,3 +62,5 @@
 The shared local map contract defines protection-zone rectangles alongside terrain. The server is authoritative for zone restrictions: monsters cannot enter, acquire, follow, or damage protected players, and player combat sessions stop when the player enters a protected tile.
 
 Combat stance, chase mode, and open-PvP preference are server-owned per online session. Follow mode uses the normal movement cooldown and collision checks; it never permits the client to choose a resulting position.
+
+Monster contact now drives a Tibia-inspired battle mode: being seen by a monster applies a 60-second combat lock that is shown to the client through `WorldPlayer.isInBattleMode`, refreshes while monsters keep contact, and clears immediately when the player steps into a protection zone.

@@ -11,6 +11,7 @@ export interface LoginRequest {
 export interface AuthUser {
   id: string;
   email: string;
+  activeWorldCharacterId: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -588,6 +589,7 @@ export interface WorldPlayer extends Position {
   mana: number;
   maxMana: number;
   facing: CardinalDirection;
+  isInBattleMode: boolean;
 }
 
 export type MonsterType = "rat" | "troll";

@@ -1,0 +1,2 @@
+ALTER TABLE "Character"
+  ADD COLUMN "activeWorldSession" BOOLEAN NOT NULL DEFAULT FALSE;

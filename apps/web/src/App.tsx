@@ -1,7 +1,7 @@
 import { Navigate, Outlet, Route, Routes, useParams } from "react-router-dom";
 
 import { useAuth } from "./auth/auth-context";
-import { ProtectedRoute, PublicOnlyRoute } from "./auth/route-guards";
+import { getAuthenticatedEntryPath, ProtectedRoute, PublicOnlyRoute } from "./auth/route-guards";
 import { StatusView } from "./components/status-view";
 import { AuthenticatedLayout } from "./layouts/authenticated-layout";
 import { CharacterCreationPage } from "./pages/character-creation-page";
@@ -12,9 +12,9 @@ import { NotFoundPage } from "./pages/not-found-page";
 import { RegisterPage } from "./pages/register-page";
 
 function HomeRedirect() {
-  const { isAuthenticated } = useAuth();
+  const { activeWorldCharacterId, isAuthenticated } = useAuth();
 
-  return <Navigate replace to={isAuthenticated ? "/characters" : "/login"} />;
+  return <Navigate replace to={isAuthenticated ? getAuthenticatedEntryPath(activeWorldCharacterId) : "/login"} />;
 }
 
 function AuthenticatedOutlet() {
@@ -26,13 +26,39 @@ function AuthenticatedOutlet() {
 }
 
 function LegacyWorldRedirect() {
+  const { activeWorldCharacterId } = useAuth();
   const { characterId } = useParams();
+
+  if (activeWorldCharacterId) {
+    return <Navigate replace to={`/game/${activeWorldCharacterId}`} />;
+  }
 
   if (!characterId) {
     return <Navigate replace to="/characters" />;
   }
 
   return <Navigate replace to={`/game/${characterId}`} />;
+}
+
+function RosterRouteGuard() {
+  const { activeWorldCharacterId } = useAuth();
+
+  if (activeWorldCharacterId) {
+    return <Navigate replace to={`/game/${activeWorldCharacterId}`} />;
+  }
+
+  return <Outlet />;
+}
+
+function ActiveWorldGameRoute() {
+  const { activeWorldCharacterId } = useAuth();
+  const { characterId } = useParams();
+
+  if (activeWorldCharacterId && characterId && activeWorldCharacterId !== characterId) {
+    return <Navigate replace to={`/game/${activeWorldCharacterId}`} />;
+  }
+
+  return <GamePage />;
 }
 
 function App() {
@@ -58,9 +84,11 @@ function App() {
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AuthenticatedOutlet />}>
-          <Route path="/characters" element={<CharacterSelectionPage />} />
-          <Route path="/characters/create" element={<CharacterCreationPage />} />
-          <Route path="/game/:characterId" element={<GamePage />} />
+          <Route element={<RosterRouteGuard />}>
+            <Route path="/characters" element={<CharacterSelectionPage />} />
+            <Route path="/characters/create" element={<CharacterCreationPage />} />
+          </Route>
+          <Route path="/game/:characterId" element={<ActiveWorldGameRoute />} />
           <Route path="/world/:characterId" element={<LegacyWorldRedirect />} />
         </Route>
       </Route>

@@ -30,8 +30,8 @@ export function LoginPage() {
     };
 
     try {
-      await login(payload);
-      navigate("/characters", { replace: true });
+      const user = await login(payload);
+      navigate(user.activeWorldCharacterId ? `/game/${user.activeWorldCharacterId}` : "/characters", { replace: true });
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     } finally {
