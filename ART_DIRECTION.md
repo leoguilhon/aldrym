@@ -417,6 +417,7 @@ Required item icon traits:
 - compact inventory composition that fills the icon space similarly to the leather equipment benchmark set, with category-specific support from `dagger.png`, `wooden_shield.png`, or `brown_backpack.png` when relevant
 - readable at native 32x32 size and still attractive when previewed larger
 - consistent contrast, lighting direction, and old-school MMORPG item language
+- AI-first generation workflow; do not use procedural canvas or scripted geometry to create final item icons
 
 Reject item icons that look:
 
@@ -426,7 +427,7 @@ Reject item icons that look:
 - undersized inside the 32x32 canvas
 - visually disconnected from the existing item set
 
-When generating new item icons, first generate at high quality, then remove the background, crop to the non-transparent subject, and downscale carefully to 32x32. Always inspect the result next to `leather_helmet.png`, `leather_armor.png`, `leather_legs.png`, and `leather_boots.png` before considering it done. For script-generated or regenerated icons, run `python apps/web/scripts/validate_item_icons.py` as an additional quality gate.
+When generating new item icons, first generate at high quality, then remove the background, crop to the non-transparent subject, and downscale carefully to 32x32. Always inspect the result next to `leather_helmet.png`, `leather_armor.png`, `leather_legs.png`, and `leather_boots.png` before considering it done. Do not replace this workflow with procedural canvas rendering or scripted icon construction. Run `python apps/web/scripts/validate_item_icons.py` only as an additional sanity check for canvas size and subject occupancy, never as a substitute for direct visual comparison with the benchmark set.
 
 ---
 

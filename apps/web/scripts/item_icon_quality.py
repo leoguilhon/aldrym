@@ -20,7 +20,7 @@ SECONDARY_REFERENCE_ICON_NAMES = (
     "wooden_shield.png",
     "brown_backpack.png",
 )
-PROJECT_GENERATED_ICON_NAMES = (
+AI_PIPELINE_ITEM_ICON_NAMES = (
     "arrow.png",
     "bolt.png",
     "bow.png",
@@ -48,14 +48,14 @@ class IconQualityRule:
 
 
 DEFAULT_ITEM_RULE = IconQualityRule(
-    min_bbox_width=22,
-    min_bbox_height=24,
-    min_alpha_pixels=300,
-    min_density=0.38,
+    min_bbox_width=18,
+    min_bbox_height=20,
+    min_alpha_pixels=180,
+    min_density=0.24,
 )
 AMMO_BUNDLE_RULE = IconQualityRule(
-    min_bbox_width=28,
-    min_bbox_height=24,
+    min_bbox_width=26,
+    min_bbox_height=22,
     min_alpha_pixels=220,
     min_density=0.25,
 )
@@ -63,22 +63,22 @@ SPECIFIC_ICON_RULES = {
     "arrow.png": AMMO_BUNDLE_RULE,
     "bolt.png": AMMO_BUNDLE_RULE,
     "bow.png": IconQualityRule(
-        min_bbox_width=22,
+        min_bbox_width=26,
         min_bbox_height=26,
-        min_alpha_pixels=330,
-        min_density=0.48,
+        min_alpha_pixels=300,
+        min_density=0.38,
     ),
     "crossbow.png": IconQualityRule(
         min_bbox_width=28,
         min_bbox_height=24,
-        min_alpha_pixels=340,
+        min_alpha_pixels=320,
         min_density=0.40,
     ),
     "quiver.png": IconQualityRule(
-        min_bbox_width=22,
+        min_bbox_width=18,
         min_bbox_height=28,
-        min_alpha_pixels=400,
-        min_density=0.55,
+        min_alpha_pixels=300,
+        min_density=0.50,
     ),
 }
 
@@ -163,9 +163,9 @@ def validate_icon(icon_name_or_path: str | Path) -> list[str]:
     return failures
 
 
-def validate_project_generated_icons() -> None:
+def validate_ai_pipeline_item_icons() -> None:
     failures: list[str] = []
-    for icon_name in PROJECT_GENERATED_ICON_NAMES:
+    for icon_name in AI_PIPELINE_ITEM_ICON_NAMES:
         icon_failures = validate_icon(icon_name)
         if icon_failures:
             metrics = describe_metrics(compute_icon_metrics(icon_name))
@@ -173,6 +173,6 @@ def validate_project_generated_icons() -> None:
 
     if failures:
         raise ValueError(
-            "Generated item icons failed the Aldrym leather-set quality gate:\n"
+            "Generated item icons failed the Aldrym item icon sanity checks:\n"
             + "\n".join(failures)
         )

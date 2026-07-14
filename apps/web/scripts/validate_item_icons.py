@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 
 from item_icon_quality import (
-    PROJECT_GENERATED_ICON_NAMES,
+    AI_PIPELINE_ITEM_ICON_NAMES,
     compute_icon_metrics,
     describe_metrics,
     format_primary_reference_summary,
@@ -16,14 +16,14 @@ from item_icon_quality import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Validate Aldrym item icons against the leather-set quality gate."
+        description="Validate Aldrym AI-pipeline item icons against the project sanity checks."
     )
     parser.add_argument(
         "icons",
         nargs="*",
         help=(
             "Item icon file names relative to apps/web/public/assets/items or absolute paths. "
-            "Defaults to the project-generated item icons."
+            "Defaults to the AI-pipeline item icons."
         ),
     )
     return parser.parse_args()
@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    icon_names = args.icons or list(PROJECT_GENERATED_ICON_NAMES)
+    icon_names = args.icons or list(AI_PIPELINE_ITEM_ICON_NAMES)
 
     print("Primary item icon benchmark:")
     print(format_primary_reference_summary())
@@ -48,13 +48,13 @@ def main() -> int:
 
     if failures:
         print("")
-        print("Quality gate failed:")
+        print("Sanity check failed:")
         for failure in failures:
             print(f"- {failure}")
         return 1
 
     print("")
-    print("Quality gate passed.")
+    print("Sanity check passed.")
     return 0
 
 
