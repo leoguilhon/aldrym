@@ -5,6 +5,8 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter
 
+from item_icon_quality import format_primary_reference_summary, validate_project_generated_icons
+
 
 CANVAS_SIZE = 32
 UPSCALE = 8
@@ -241,10 +243,200 @@ def draw_potion(liquid_deep: tuple[int, int, int, int], liquid_dark: tuple[int, 
     return finalize(image)
 
 
+def draw_arrow() -> Image.Image:
+    image, draw = create_canvas()
+    arrow_specs = [
+        {"offset": (0.0, 0.0), "fletch_dark": RED_DARK, "fletch_light": RED_LIGHT},
+        {"offset": (-2.5, 2.1), "fletch_dark": BLUE_DARK, "fletch_light": BLUE_LIGHT},
+        {"offset": (2.3, -1.9), "fletch_dark": LEATHER_DARK, "fletch_light": LEATHER_LIGHT},
+    ]
+
+    for spec in arrow_specs:
+        ox, oy = spec["offset"]
+        draw_line(draw, (7.8 + ox, 24.1 + oy), (22.0 + ox, 10.2 + oy), OUTLINE, 1.86)
+        draw_line(draw, (8.2 + ox, 23.7 + oy), (21.6 + ox, 10.6 + oy), WOOD_DEEP, 1.22)
+        draw_line(draw, (8.8 + ox, 23.0 + oy), (20.9 + ox, 11.3 + oy), WOOD_MID, 0.62)
+        draw_line(draw, (9.8 + ox, 22.0 + oy), (19.9 + ox, 12.3 + oy), WOOD_LIGHT, 0.22)
+        draw.polygon(
+            points([(20.3 + ox, 7.7 + oy), (26.0 + ox, 10.0 + oy), (22.5 + ox, 14.6 + oy), (18.2 + ox, 12.2 + oy)]),
+            fill=STEEL_DARK,
+            outline=OUTLINE,
+            width=hd(0.44),
+        )
+        draw.polygon(
+            points([(20.9 + ox, 8.8 + oy), (24.5 + ox, 10.2 + oy), (22.2 + ox, 13.1 + oy), (19.5 + ox, 11.7 + oy)]),
+            fill=STEEL_LIGHT,
+        )
+        draw.polygon(
+            points([(6.1 + ox, 22.4 + oy), (9.7 + ox, 20.4 + oy), (12.0 + ox, 22.5 + oy), (8.9 + ox, 25.7 + oy)]),
+            fill=spec["fletch_dark"],
+            outline=OUTLINE_SOFT,
+            width=hd(0.2),
+        )
+        draw.polygon(
+            points([(5.0 + ox, 24.0 + oy), (7.8 + ox, 21.5 + oy), (10.0 + ox, 23.3 + oy), (7.2 + ox, 26.1 + oy)]),
+            fill=spec["fletch_light"],
+            outline=OUTLINE_SOFT,
+            width=hd(0.18),
+        )
+
+    draw.rounded_rectangle(box(12.5, 14.7, 18.6, 18.8), radius=hd(0.6), fill=LEATHER_DARK, outline=OUTLINE_SOFT, width=hd(0.22))
+    draw.rounded_rectangle(box(13.2, 15.4, 17.8, 18.0), radius=hd(0.38), fill=LEATHER_LIGHT)
+    draw_line(draw, (13.3, 16.1), (17.8, 17.5), LEATHER_MID, 0.18)
+    return finalize(image)
+
+
+def draw_bolt() -> Image.Image:
+    image, draw = create_canvas()
+    bolt_specs = [
+        {"offset": (0.0, 0.0), "tail_dark": BLUE_DARK, "tail_light": BLUE_LIGHT},
+        {"offset": (-2.3, 1.9), "tail_dark": RED_DARK, "tail_light": RED_LIGHT},
+        {"offset": (2.2, -1.5), "tail_dark": LEATHER_DARK, "tail_light": LEATHER_LIGHT},
+    ]
+
+    for spec in bolt_specs:
+        ox, oy = spec["offset"]
+        draw_line(draw, (8.7 + ox, 23.1 + oy), (22.3 + ox, 10.5 + oy), OUTLINE, 2.06)
+        draw_line(draw, (9.0 + ox, 22.8 + oy), (22.0 + ox, 10.8 + oy), WOOD_DEEP, 1.34)
+        draw_line(draw, (9.6 + ox, 22.1 + oy), (21.3 + ox, 11.4 + oy), WOOD_MID, 0.56)
+        draw.polygon(
+            points([(19.7 + ox, 7.8 + oy), (26.1 + ox, 10.4 + oy), (22.6 + ox, 15.1 + oy), (17.9 + ox, 12.4 + oy)]),
+            fill=STEEL_DARK,
+            outline=OUTLINE,
+            width=hd(0.44),
+        )
+        draw.polygon(
+            points([(20.5 + ox, 8.8 + oy), (24.4 + ox, 10.4 + oy), (22.1 + ox, 13.3 + oy), (19.3 + ox, 11.7 + oy)]),
+            fill=STEEL_LIGHT,
+        )
+        draw.polygon(
+            points([(6.7 + ox, 21.5 + oy), (10.5 + ox, 20.1 + oy), (12.1 + ox, 22.1 + oy), (9.2 + ox, 25.0 + oy)]),
+            fill=spec["tail_dark"],
+            outline=OUTLINE_SOFT,
+            width=hd(0.2),
+        )
+        draw.polygon(
+            points([(5.7 + ox, 23.1 + oy), (8.6 + ox, 21.3 + oy), (10.5 + ox, 22.9 + oy), (7.9 + ox, 25.5 + oy)]),
+            fill=spec["tail_light"],
+            outline=OUTLINE_SOFT,
+            width=hd(0.18),
+        )
+
+    draw.rounded_rectangle(box(12.1, 14.7, 18.0, 18.6), radius=hd(0.5), fill=LEATHER_DEEP, outline=OUTLINE_SOFT, width=hd(0.2))
+    draw.rounded_rectangle(box(12.7, 15.2, 17.2, 17.9), radius=hd(0.32), fill=LEATHER_MID)
+    draw_line(draw, (12.9, 15.7), (17.0, 17.5), LEATHER_GLOW, 0.18)
+    return finalize(image)
+
+
+def draw_bow() -> Image.Image:
+    image, draw = create_canvas()
+    draw.polygon(
+        points([(9.4, 25.9), (7.5, 22.7), (6.8, 18.3), (7.0, 13.0), (8.3, 8.9), (11.1, 5.4), (14.8, 3.4), (18.3, 3.6), (20.0, 5.9), (19.3, 9.4), (16.7, 13.0), (13.9, 16.3), (12.3, 20.3), (12.0, 24.1)]),
+        fill=WOOD_DARK,
+        outline=OUTLINE,
+        width=hd(0.9),
+    )
+    draw.polygon(
+        points([(10.5, 24.4), (9.0, 21.8), (8.3, 18.4), (8.4, 13.8), (9.6, 10.4), (12.0, 7.3), (15.0, 5.8), (17.2, 6.0), (18.0, 7.2), (17.5, 9.0), (15.5, 11.9), (13.2, 15.0), (11.8, 19.0), (11.4, 22.8)]),
+        fill=WOOD_MID,
+    )
+    draw.line(points([(18.6, 3.9), (20.0, 7.6), (20.3, 12.3), (19.4, 16.7), (17.5, 21.2), (14.8, 25.1)]), fill=OUTLINE, width=hd(1.18))
+    draw.line(points([(18.1, 4.6), (19.4, 7.9), (19.6, 12.1), (18.9, 16.1), (17.1, 20.2), (14.6, 24.1)]), fill=WOOD_DEEP, width=hd(0.76))
+    draw.line(points([(17.7, 5.2), (18.9, 8.1), (19.0, 12.0), (18.3, 15.6), (16.8, 19.5), (14.4, 23.4)]), fill=WOOD_LIGHT, width=hd(0.24))
+    draw_line(draw, (18.6, 4.0), (14.4, 25.0), OUTLINE, 0.62)
+    draw_line(draw, (18.2, 4.6), (14.7, 24.2), STEEL_LIGHT, 0.26)
+    draw_line(draw, (8.2, 18.5), (21.7, 11.8), OUTLINE, 1.5)
+    draw_line(draw, (8.6, 18.2), (21.3, 12.1), WOOD_MID, 0.88)
+    draw_line(draw, (9.3, 17.7), (20.5, 12.7), WOOD_LIGHT, 0.22)
+    draw.polygon(points([(20.4, 10.6), (26.1, 11.8), (22.4, 16.0), (18.4, 13.4)]), fill=STEEL_DARK, outline=OUTLINE_SOFT, width=hd(0.22))
+    draw.polygon(points([(21.0, 11.4), (24.1, 12.0), (22.0, 14.4), (19.7, 13.0)]), fill=STEEL_LIGHT)
+    draw.polygon(points([(7.3, 17.2), (9.6, 15.8), (10.9, 17.5), (8.7, 20.0)]), fill=RED_DARK, outline=OUTLINE_SOFT, width=hd(0.18))
+    draw.polygon(points([(6.1, 18.0), (8.2, 16.1), (9.7, 17.8), (7.8, 20.5)]), fill=RED_LIGHT, outline=OUTLINE_SOFT, width=hd(0.16))
+    draw.rounded_rectangle(box(10.8, 14.3, 15.3, 20.7), radius=hd(0.65), fill=LEATHER_DEEP, outline=OUTLINE_SOFT, width=hd(0.24))
+    draw.rounded_rectangle(box(11.4, 15.0, 14.6, 19.7), radius=hd(0.4), fill=LEATHER_LIGHT)
+    for y in (15.8, 17.2, 18.6):
+        draw_line(draw, (11.2, y), (14.7, y), LEATHER_MID, 0.16)
+    return finalize(image)
+
+
+def draw_crossbow() -> Image.Image:
+    image, draw = create_canvas()
+    draw.polygon(
+        points([(5.8, 11.6), (12.8, 7.7), (20.5, 7.5), (27.2, 10.8), (25.0, 15.0), (16.3, 17.8), (7.5, 17.0)]),
+        fill=WOOD_DARK,
+        outline=OUTLINE,
+        width=hd(0.9),
+    )
+    draw.polygon(
+        points([(7.2, 12.2), (13.2, 9.1), (19.9, 8.9), (24.8, 11.2), (23.2, 13.8), (16.2, 16.0), (8.8, 15.6)]),
+        fill=WOOD_MID,
+    )
+    draw.polygon(
+        points([(12.6, 9.5), (19.0, 9.5), (22.7, 11.2), (16.1, 13.9), (10.7, 13.1)]),
+        fill=WOOD_LIGHT,
+    )
+    draw.arc(box(2.7, 4.7, 17.6, 17.5), start=182, end=350, fill=OUTLINE, width=hd(1.12))
+    draw.arc(box(3.3, 5.4, 17.0, 16.8), start=182, end=350, fill=STEEL_DARK, width=hd(0.68))
+    draw.arc(box(15.6, 4.7, 29.7, 17.6), start=190, end=358, fill=OUTLINE, width=hd(1.12))
+    draw.arc(box(16.1, 5.4, 29.1, 16.9), start=190, end=358, fill=STEEL_DARK, width=hd(0.68))
+    draw_line(draw, (4.8, 9.8), (25.9, 13.2), STEEL_LIGHT, 0.32)
+    draw_line(draw, (6.4, 9.6), (25.9, 12.9), OUTLINE_SOFT, 0.18)
+    draw_line(draw, (10.3, 25.6), (18.4, 15.8), OUTLINE, 2.18)
+    draw_line(draw, (10.7, 25.2), (18.1, 16.1), WOOD_DEEP, 1.44)
+    draw_line(draw, (11.4, 24.5), (17.4, 16.8), WOOD_MID, 0.6)
+    draw.rounded_rectangle(box(13.2, 11.3, 18.6, 15.9), radius=hd(0.7), fill=LEATHER_DEEP, outline=OUTLINE_SOFT, width=hd(0.24))
+    draw.rounded_rectangle(box(13.9, 12.0, 17.8, 15.0), radius=hd(0.4), fill=LEATHER_LIGHT)
+    draw.polygon(points([(22.8, 10.9), (26.4, 11.9), (23.2, 14.1)]), fill=RED_DARK, outline=OUTLINE_SOFT, width=hd(0.18))
+    draw.polygon(points([(21.2, 10.6), (24.0, 11.2), (22.0, 12.8)]), fill=STEEL_LIGHT, outline=OUTLINE_SOFT, width=hd(0.14))
+    return finalize(image)
+
+
+def draw_quiver() -> Image.Image:
+    image, draw = create_canvas()
+    draw.polygon(
+        points([(8.8, 7.4), (18.8, 6.5), (22.8, 10.1), (22.9, 22.6), (19.2, 26.4), (11.0, 26.7), (7.7, 23.1), (7.4, 10.5)]),
+        fill=LEATHER_DARK,
+        outline=OUTLINE,
+        width=hd(0.86),
+    )
+    draw.polygon(
+        points([(9.8, 8.5), (18.0, 7.9), (20.7, 10.5), (20.8, 21.9), (18.4, 24.5), (11.8, 24.8), (9.3, 22.0), (9.1, 10.8)]),
+        fill=LEATHER_MID,
+    )
+    draw.polygon(
+        points([(10.8, 9.8), (17.6, 9.5), (19.2, 11.2), (19.3, 15.8), (17.4, 18.2), (12.5, 18.5), (10.7, 16.3), (10.6, 11.3)]),
+        fill=LEATHER_LIGHT,
+    )
+    for shaft_x in (11.4, 13.8, 16.2, 18.5):
+        draw_line(draw, (shaft_x, 5.7), (shaft_x, 16.0), OUTLINE, 0.72)
+        draw_line(draw, (shaft_x + 0.1, 6.0), (shaft_x + 0.1, 15.6), WOOD_DEEP, 0.42)
+    draw.polygon(points([(10.4, 3.7), (12.6, 4.5), (11.3, 7.1)]), fill=STEEL_LIGHT, outline=OUTLINE_SOFT, width=hd(0.16))
+    draw.polygon(points([(12.8, 2.9), (15.2, 3.7), (13.8, 6.3)]), fill=STEEL_LIGHT, outline=OUTLINE_SOFT, width=hd(0.16))
+    draw.polygon(points([(15.3, 3.2), (17.6, 4.0), (16.3, 6.5)]), fill=STEEL_LIGHT, outline=OUTLINE_SOFT, width=hd(0.16))
+    draw.polygon(points([(17.7, 3.8), (20.0, 4.7), (18.8, 7.1)]), fill=STEEL_LIGHT, outline=OUTLINE_SOFT, width=hd(0.16))
+    draw.arc(box(2.6, 8.1, 18.5, 25.9), start=236, end=340, fill=OUTLINE, width=hd(1.2))
+    draw.arc(box(3.2, 8.8, 18.0, 25.2), start=236, end=340, fill=LEATHER_DEEP, width=hd(0.76))
+    draw.arc(box(4.0, 9.8, 17.0, 24.1), start=238, end=337, fill=LEATHER_GLOW, width=hd(0.24))
+    draw.rounded_rectangle(box(12.0, 18.7, 17.8, 21.2), radius=hd(0.55), fill=LEATHER_DEEP, outline=OUTLINE_SOFT, width=hd(0.18))
+    draw.rounded_rectangle(box(12.6, 19.1, 17.1, 20.6), radius=hd(0.35), fill=LEATHER_LIGHT)
+    draw_line(draw, (11.9, 10.7), (11.9, 23.0), LEATHER_GLOW, 0.24)
+    draw_line(draw, (18.1, 10.2), (18.1, 22.2), OUTLINE_SOFT, 0.18)
+    return finalize(image)
+
+
 def main() -> None:
+    print("Primary item icon benchmark:")
+    print(format_primary_reference_summary())
+
     copy_icon("chipped_dagger.png", "dagger.png")
     copy_icon("patched_tunic.png", "leather_armor.png")
     copy_icon("splintered_shield.png", "wooden_shield.png")
+
+    save_image(draw_arrow(), "arrow.png")
+    save_image(draw_bolt(), "bolt.png")
+    save_image(draw_bow(), "bow.png")
+    save_image(draw_crossbow(), "crossbow.png")
+    save_image(draw_quiver(), "quiver.png")
 
     keep_icon("leather_helmet.png")
     keep_icon("leather_legs.png")
@@ -253,6 +445,9 @@ def main() -> None:
     keep_icon("wooden_club.png")
     keep_icon("small_health_potion.png")
     keep_icon("small_mana_potion.png")
+
+    validate_project_generated_icons()
+    print("Generated item icons passed the Aldrym leather-set quality gate.")
 
 
 if __name__ == "__main__":

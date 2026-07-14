@@ -954,8 +954,16 @@ function formatEquipmentSlot(slot: EquipmentSlot): string {
 
 function getItemIconPath(itemKey: string): string {
   switch (itemKey) {
+    case "arrow":
+      return "/assets/items/arrow.png";
+    case "bolt":
+      return "/assets/items/bolt.png";
+    case "bow":
+      return "/assets/items/bow.png";
     case "brown_backpack":
       return "/assets/items/brown_backpack.png";
+    case "crossbow":
+      return "/assets/items/crossbow.png";
     case "dagger":
       return "/assets/items/dagger.png";
     case "gold_coin":
@@ -970,6 +978,8 @@ function getItemIconPath(itemKey: string): string {
       return "/assets/items/leather_legs.png";
     case "meat":
       return "/assets/items/meat.png";
+    case "quiver":
+      return "/assets/items/quiver.png";
     case "small_axe":
       return "/assets/items/small_axe.png";
     case "small_health_potion":
@@ -990,15 +1000,19 @@ function getItemTooltip(
     InventoryItem | CorpseItem,
     | "armor"
     | "attack"
+    | "compatibleCharacterClasses"
     | "defense"
     | "foodSeconds"
     | "healthRestore"
     | "itemKey"
     | "itemType"
+    | "maxStack"
     | "manaRestore"
     | "name"
     | "quantity"
+    | "requiredAmmoType"
     | "stackable"
+    | "weaponRange"
     | "weaponSkill"
   >
 ): string {
@@ -1009,6 +1023,10 @@ function getItemTooltip(
 
   if (item.attack) {
     lines.push(`Attack: ${item.attack}`);
+  }
+
+  if (item.weaponRange && item.weaponRange > 1) {
+    lines.push(`Range: ${item.weaponRange}`);
   }
 
   if (item.defense) {
@@ -1023,6 +1041,10 @@ function getItemTooltip(
     lines.push(`Skill: ${item.weaponSkill}`);
   }
 
+  if (item.requiredAmmoType) {
+    lines.push(`Ammo: ${item.requiredAmmoType}`);
+  }
+
   if (item.foodSeconds) {
     lines.push(`Food: ${item.foodSeconds}s`);
   }
@@ -1033,6 +1055,14 @@ function getItemTooltip(
 
   if (item.manaRestore) {
     lines.push(`Mana: +${item.manaRestore}`);
+  }
+
+  if (item.maxStack) {
+    lines.push(`Max stack: ${item.maxStack}`);
+  }
+
+  if (item.compatibleCharacterClasses?.length) {
+    lines.push(`Class: ${item.compatibleCharacterClasses.join(", ")}`);
   }
 
   return lines.join("\n");
@@ -1086,7 +1116,7 @@ function readDragPayload(event: DragEvent): DragItemPayload | null {
 
 function getItemSlotDropTarget(item: InventoryItem | null, location: DragItemLocation): InventoryMoveTarget | null {
   if (location.locationType === "equipment") {
-    if (location.equipmentSlot === "backpack" && item?.isContainer) {
+    if (item?.isContainer) {
       return {
         locationType: "container",
         containerItemId: item.id

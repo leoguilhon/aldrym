@@ -135,7 +135,11 @@ const outfitTextureKeys = {
 } as const;
 type OutfitTextureKey = (typeof outfitTextureKeys)[keyof typeof outfitTextureKeys];
 const itemTextureKeys = {
+  arrow: "item-arrow",
+  bolt: "item-bolt",
+  bow: "item-bow",
   brown_backpack: "item-brown-backpack",
+  crossbow: "item-crossbow",
   dagger: "item-dagger",
   gold_coin: "item-gold-coin",
   leather_armor: "item-leather-armor",
@@ -143,6 +147,7 @@ const itemTextureKeys = {
   leather_helmet: "item-leather-helmet",
   leather_legs: "item-leather-legs",
   meat: "item-meat",
+  quiver: "item-quiver",
   small_axe: "item-small-axe",
   small_health_potion: "item-small-health-potion",
   small_mana_potion: "item-small-mana-potion",
@@ -240,14 +245,19 @@ export class MainScene extends Phaser.Scene {
       frameHeight: 64,
       frameWidth: 64
     });
+    this.load.image(itemTextureKeys.arrow, "/assets/items/arrow.png");
+    this.load.image(itemTextureKeys.bolt, "/assets/items/bolt.png");
+    this.load.image(itemTextureKeys.bow, "/assets/items/bow.png");
     this.load.image(itemTextureKeys.dagger, "/assets/items/dagger.png");
     this.load.image(itemTextureKeys.gold_coin, "/assets/items/gold_coin.png");
     this.load.image(itemTextureKeys.brown_backpack, "/assets/items/brown_backpack.png");
+    this.load.image(itemTextureKeys.crossbow, "/assets/items/crossbow.png");
     this.load.image(itemTextureKeys.leather_armor, "/assets/items/leather_armor.png");
     this.load.image(itemTextureKeys.leather_boots, "/assets/items/leather_boots.png");
     this.load.image(itemTextureKeys.leather_helmet, "/assets/items/leather_helmet.png");
     this.load.image(itemTextureKeys.leather_legs, "/assets/items/leather_legs.png");
     this.load.image(itemTextureKeys.meat, "/assets/items/meat.png");
+    this.load.image(itemTextureKeys.quiver, "/assets/items/quiver.png");
     this.load.image(itemTextureKeys.small_axe, "/assets/items/small_axe.png");
     this.load.image(itemTextureKeys.small_health_potion, "/assets/items/small_health_potion.png");
     this.load.image(itemTextureKeys.small_mana_potion, "/assets/items/small_mana_potion.png");
@@ -1580,6 +1590,11 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
+    if (itemKey === "quiver") {
+      sprite.setDisplaySize(20, 20);
+      return;
+    }
+
     if (itemKey === "wooden_shield" || itemKey === "leather_armor") {
       sprite.setDisplaySize(20, 20);
       return;
@@ -1597,6 +1612,16 @@ export class MainScene extends Phaser.Scene {
 
     if (itemKey === "small_axe" || itemKey === "wooden_club") {
       sprite.setDisplaySize(20, 20);
+      return;
+    }
+
+    if (itemKey === "bow" || itemKey === "crossbow") {
+      sprite.setDisplaySize(21, 21);
+      return;
+    }
+
+    if (itemKey === "arrow" || itemKey === "bolt") {
+      sprite.setDisplaySize(18, 18);
       return;
     }
 

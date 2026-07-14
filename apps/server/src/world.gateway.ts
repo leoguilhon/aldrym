@@ -261,6 +261,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         worldPlayerState = this.worldStateService.connectPlayer(character.id, client.id) ?? activePlayer;
       } else {
         worldPlayerState = {
+          attackRange: character.combatStats.attackRange,
           socketId: client.id,
           connected: true,
           userId: user.id,
@@ -280,6 +281,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         this.worldStateService.addPlayer(worldPlayerState);
         shouldBroadcastJoin = true;
       }
+
+      worldPlayerState.attackRange = character.combatStats.attackRange;
 
       this.initializeSocketSessionState(client.id, character, worldPlayerState.combatStance);
       await this.charactersService.activateWorldSessionForUserCharacter(user.id, character.id);
@@ -1360,10 +1363,6 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
-    if (!this.isAdjacent(activePlayer.position, monster)) {
-      return;
-    }
-
     const now = Date.now();
     const nextAttackAt = this.nextPlayerAttackAtBySocketId.get(client.id) ?? 0;
 
@@ -1371,10 +1370,31 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
-    this.nextPlayerAttackAtBySocketId.set(client.id, now + PLAYER_ATTACK_INTERVAL_MS);
-    this.startOrRefreshBattleMode(activePlayer.characterId);
     const stance = activePlayer.combatStance;
     const character = await this.charactersService.findByIdForUser(user.id, activePlayer.characterId, stance);
+
+    if (!this.isWithinWeaponRange(activePlayer.position, monster, character.combatStats.attackRange)) {
+      return;
+    }
+
+    if (character.combatStats.attackRange > 1 && !this.hasLineOfSight(activePlayer.position, monster)) {
+      return;
+    }
+
+    try {
+      await this.charactersService.consumeAmmoForRangedAttackForUserCharacter(user.id, activePlayer.characterId);
+    } catch (error) {
+      if (error instanceof InventoryValidationError) {
+        this.emitCombatError(client, error.message, error.code);
+        this.stopCombatSession(client, error.code === "no_ammo" ? "no_ammo" : "invalid_loadout");
+        return;
+      }
+
+      throw error;
+    }
+
+    this.nextPlayerAttackAtBySocketId.set(client.id, now + PLAYER_ATTACK_INTERVAL_MS);
+    this.startOrRefreshBattleMode(activePlayer.characterId);
     const rawDamage = this.rollDamage(0, Math.max(0, character.combatStats.attackValue * 2));
     const armorReduction = this.rollArmorReduction(monster.armor, rawDamage);
     const damage = Math.max(0, rawDamage - armorReduction);
@@ -1386,7 +1406,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       stance
     );
 
-    await this.emitCharacterState(client, user.id, activePlayer.characterId, skilledCharacter);
+    if (character.combatStats.attackRange > 1) {
+      await this.emitInventoryState(client, user.id, activePlayer.characterId, undefined, skilledCharacter);
+    } else {
+      await this.emitCharacterState(client, user.id, activePlayer.characterId, skilledCharacter);
+    }
 
     if (damage <= 0) {
       return;
@@ -1617,7 +1641,12 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       const player = this.worldStateService.getPlayerBySocketId(socketId);
       const monster = this.worldStateService.getMonster(session.monsterId);
 
-      if (!player || !monster?.alive || this.isAdjacent(player.position, monster)) {
+      if (
+        !player ||
+        !monster?.alive ||
+        (this.isWithinWeaponRange(player.position, monster, player.attackRange) &&
+          (player.attackRange <= 1 || this.hasLineOfSight(player.position, monster)))
+      ) {
         continue;
       }
 
@@ -2180,6 +2209,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
   private syncWorldPlayerState(characterId: string, character: CharacterSummary): void {
     const updatedWorldPlayer = this.worldStateService.updatePlayerStatsByCharacterId(characterId, {
+      attackRange: character.combatStats.attackRange,
       level: character.level,
       health: character.health,
       maxHealth: character.maxHealth,
@@ -2384,6 +2414,12 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
   private isAdjacent(attacker: Position, target: Position): boolean {
     return attacker.z === target.z && Math.max(Math.abs(attacker.x - target.x), Math.abs(attacker.y - target.y)) === 1;
+  }
+
+  private isWithinWeaponRange(attacker: Position, target: Position, range: number): boolean {
+    const normalizedRange = Math.max(1, Math.floor(range));
+    const distance = Math.max(Math.abs(attacker.x - target.x), Math.abs(attacker.y - target.y));
+    return attacker.z === target.z && distance > 0 && distance <= normalizedRange;
   }
 
   private isInDirectContact(player: Position, target: Position): boolean {

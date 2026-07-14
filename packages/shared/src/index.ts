@@ -76,6 +76,7 @@ export interface CharacterFoodState {
 
 export interface CharacterCombatStats {
   armorValue: number;
+  attackRange: number;
   attackSkill: WeaponCombatSkill;
   attackValue: number;
   defenseSkill: WeaponCombatSkill | "shielding";
@@ -89,6 +90,7 @@ export interface CharacterCombatStats {
 export interface ItemCombatStats {
   armor: number | null;
   attack: number | null;
+  weaponRange: number | null;
   defense: number | null;
   foodSeconds: number | null;
   healthRestore: number | null;
@@ -419,6 +421,10 @@ export function getWeaponDefense(item: Pick<ItemCombatStats, "defense"> | null |
   return Math.max(0, item?.defense ?? 0);
 }
 
+export function getWeaponRange(item: Pick<ItemCombatStats, "weaponRange"> | null | undefined): number {
+  return Math.max(1, item?.weaponRange ?? 1);
+}
+
 export function getShieldDefense(item: Pick<ItemCombatStats, "defense"> | null | undefined): number {
   return Math.max(0, item?.defense ?? 0);
 }
@@ -454,11 +460,12 @@ export function calculateCharacterCombatStats(options: {
   shield?: Pick<ItemCombatStats, "defense"> | null;
   skills: CharacterSkills;
   stance: CombatStance;
-  weapon?: Pick<ItemCombatStats, "attack" | "defense" | "shieldDefenseModifier" | "weaponSkill"> | null;
+  weapon?: Pick<ItemCombatStats, "attack" | "defense" | "shieldDefenseModifier" | "weaponRange" | "weaponSkill"> | null;
 }): CharacterCombatStats {
   const attackSkill = getWeaponCombatSkill(options.weapon);
   const weaponAttack = getWeaponAttack(options.weapon);
   const weaponDefense = getWeaponDefense(options.weapon);
+  const attackRange = getWeaponRange(options.weapon);
   const shieldDefense = getShieldDefense(options.shield);
   const defenseSkill = shieldDefense > 0 ? "shielding" : attackSkill;
   const baseDefense =
@@ -468,6 +475,7 @@ export function calculateCharacterCombatStats(options: {
 
   return {
     armorValue: getTotalArmorValue(options.equippedItems),
+    attackRange,
     attackSkill,
     attackValue: calculateAttackValue({
       attack: weaponAttack,
@@ -613,7 +621,9 @@ export interface WorldMonster extends Position {
   spawnZ: number;
 }
 
-export type ItemType = "armor" | "container" | "consumable" | "creature_part" | "currency" | "shield" | "weapon";
+export type AmmoType = "arrow" | "bolt";
+
+export type ItemType = "ammo" | "armor" | "container" | "consumable" | "creature_part" | "currency" | "shield" | "weapon";
 
 export const equipmentSlots = [
   "necklace",
@@ -635,6 +645,8 @@ export type InventoryLocationType = "root" | "container" | "equipment";
 export interface ItemDefinition {
   armor: number | null;
   attack: number | null;
+  ammoType: AmmoType | null;
+  compatibleCharacterClasses?: CharacterClass[];
   itemKey: string;
   name: string;
   stackable: boolean;
@@ -642,11 +654,14 @@ export interface ItemDefinition {
   foodSeconds: number | null;
   healthRestore: number | null;
   manaRestore: number | null;
+  maxStack: number | null;
   itemType: ItemType;
   compatibleEquipmentSlots?: EquipmentSlot[];
   isContainer: boolean;
   containerSize: number | null;
+  requiredAmmoType: AmmoType | null;
   shieldDefenseModifier: number | null;
+  weaponRange: number | null;
   weaponSkill: WeaponCombatSkill | null;
 }
 
@@ -654,222 +669,403 @@ export function isItemUsable(item: Pick<ItemDefinition, "foodSeconds" | "healthR
   return Math.max(0, item?.foodSeconds ?? 0, item?.healthRestore ?? 0, item?.manaRestore ?? 0) > 0;
 }
 
+export function getItemMaxStack(item: Pick<ItemDefinition, "maxStack" | "stackable"> | null | undefined): number | null {
+  if (!item?.stackable) {
+    return 1;
+  }
+
+  return item.maxStack ?? null;
+}
+
 export const itemDefinitions: Record<string, ItemDefinition> = {
   gold_coin: {
     armor: null,
     attack: null,
+    ammoType: null,
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: null,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "gold_coin",
     itemType: "currency",
+    maxStack: 100,
     manaRestore: null,
     name: "Gold Coin",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: true,
+    weaponRange: null,
+    weaponSkill: null
+  },
+  arrow: {
+    armor: null,
+    attack: null,
+    ammoType: "arrow",
+    containerSize: null,
+    compatibleCharacterClasses: undefined,
+    defense: null,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "arrow",
+    itemType: "ammo",
+    maxStack: 100,
+    manaRestore: null,
+    name: "Arrow",
+    requiredAmmoType: null,
+    shieldDefenseModifier: null,
+    stackable: true,
+    weaponRange: null,
     weaponSkill: null
   },
   dagger: {
     armor: null,
     attack: 10,
+    ammoType: null,
     compatibleEquipmentSlots: ["weapon"],
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: 6,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "dagger",
     itemType: "weapon",
+    maxStack: null,
     manaRestore: null,
     name: "Dagger",
+    requiredAmmoType: null,
     shieldDefenseModifier: 0,
     stackable: false,
+    weaponRange: 1,
     weaponSkill: "sword"
+  },
+  bolt: {
+    armor: null,
+    attack: null,
+    ammoType: "bolt",
+    containerSize: null,
+    compatibleCharacterClasses: undefined,
+    defense: null,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "bolt",
+    itemType: "ammo",
+    maxStack: 100,
+    manaRestore: null,
+    name: "Bolt",
+    requiredAmmoType: null,
+    shieldDefenseModifier: null,
+    stackable: true,
+    weaponRange: null,
+    weaponSkill: null
+  },
+  bow: {
+    armor: null,
+    attack: 12,
+    ammoType: null,
+    compatibleCharacterClasses: ["hunter"],
+    compatibleEquipmentSlots: ["weapon"],
+    containerSize: null,
+    defense: 4,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "bow",
+    itemType: "weapon",
+    maxStack: null,
+    manaRestore: null,
+    name: "Bow",
+    requiredAmmoType: "arrow",
+    shieldDefenseModifier: 0,
+    stackable: false,
+    weaponRange: 5,
+    weaponSkill: "distance"
   },
   small_axe: {
     armor: null,
     attack: 10,
+    ammoType: null,
     compatibleEquipmentSlots: ["weapon"],
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: 5,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "small_axe",
     itemType: "weapon",
+    maxStack: null,
     manaRestore: null,
     name: "Small Axe",
+    requiredAmmoType: null,
     shieldDefenseModifier: 0,
     stackable: false,
+    weaponRange: 1,
     weaponSkill: "axe"
+  },
+  crossbow: {
+    armor: null,
+    attack: 14,
+    ammoType: null,
+    compatibleCharacterClasses: ["hunter"],
+    compatibleEquipmentSlots: ["weapon"],
+    containerSize: null,
+    defense: 3,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: false,
+    itemKey: "crossbow",
+    itemType: "weapon",
+    maxStack: null,
+    manaRestore: null,
+    name: "Crossbow",
+    requiredAmmoType: "bolt",
+    shieldDefenseModifier: 0,
+    stackable: false,
+    weaponRange: 5,
+    weaponSkill: "distance"
   },
   wooden_club: {
     armor: null,
     attack: 10,
+    ammoType: null,
     compatibleEquipmentSlots: ["weapon"],
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: 5,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "wooden_club",
     itemType: "weapon",
+    maxStack: null,
     manaRestore: null,
     name: "Wooden Club",
+    requiredAmmoType: null,
     shieldDefenseModifier: 0,
     stackable: false,
+    weaponRange: 1,
     weaponSkill: "club"
   },
   brown_backpack: {
     armor: null,
     attack: null,
+    ammoType: null,
     compatibleEquipmentSlots: ["backpack"],
     containerSize: 20,
+    compatibleCharacterClasses: undefined,
     defense: null,
     foodSeconds: null,
     healthRestore: null,
     isContainer: true,
     itemKey: "brown_backpack",
     itemType: "container",
+    maxStack: null,
     manaRestore: null,
     name: "Brown Backpack",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: false,
+    weaponRange: null,
+    weaponSkill: null
+  },
+  quiver: {
+    armor: null,
+    attack: null,
+    ammoType: null,
+    compatibleCharacterClasses: ["hunter"],
+    compatibleEquipmentSlots: ["shield"],
+    containerSize: 8,
+    defense: null,
+    foodSeconds: null,
+    healthRestore: null,
+    isContainer: true,
+    itemKey: "quiver",
+    itemType: "container",
+    maxStack: null,
+    manaRestore: null,
+    name: "Quiver",
+    requiredAmmoType: null,
+    shieldDefenseModifier: null,
+    stackable: false,
+    weaponRange: null,
     weaponSkill: null
   },
   wooden_shield: {
     armor: null,
     attack: null,
+    ammoType: null,
     compatibleEquipmentSlots: ["shield"],
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: 11,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "wooden_shield",
     itemType: "shield",
+    maxStack: null,
     manaRestore: null,
     name: "Wooden Shield",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: false,
+    weaponRange: null,
     weaponSkill: null
   },
   leather_armor: {
     armor: 3,
     attack: null,
+    ammoType: null,
     compatibleEquipmentSlots: ["body"],
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: null,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "leather_armor",
     itemType: "armor",
+    maxStack: null,
     manaRestore: null,
     name: "Leather Armor",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: false,
+    weaponRange: null,
     weaponSkill: null
   },
   leather_helmet: {
     armor: 1,
     attack: null,
+    ammoType: null,
     compatibleEquipmentSlots: ["head"],
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: null,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "leather_helmet",
     itemType: "armor",
+    maxStack: null,
     manaRestore: null,
     name: "Leather Helmet",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: false,
+    weaponRange: null,
     weaponSkill: null
   },
   leather_legs: {
     armor: 2,
     attack: null,
+    ammoType: null,
     compatibleEquipmentSlots: ["legs"],
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: null,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "leather_legs",
     itemType: "armor",
+    maxStack: null,
     manaRestore: null,
     name: "Leather Legs",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: false,
+    weaponRange: null,
     weaponSkill: null
   },
   leather_boots: {
     armor: 1,
     attack: null,
+    ammoType: null,
     compatibleEquipmentSlots: ["feet"],
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: null,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "leather_boots",
     itemType: "armor",
+    maxStack: null,
     manaRestore: null,
     name: "Leather Boots",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: false,
+    weaponRange: null,
     weaponSkill: null
   },
   meat: {
     armor: null,
     attack: null,
+    ammoType: null,
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: null,
     foodSeconds: 180,
     healthRestore: null,
     isContainer: false,
     itemKey: "meat",
     itemType: "consumable",
+    maxStack: null,
     manaRestore: null,
     name: "Meat",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: true,
+    weaponRange: null,
     weaponSkill: null
   },
   small_health_potion: {
     armor: null,
     attack: null,
+    ammoType: null,
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: null,
     foodSeconds: null,
     healthRestore: 30,
     isContainer: false,
     itemKey: "small_health_potion",
     itemType: "consumable",
+    maxStack: null,
     manaRestore: null,
     name: "Small Health Potion",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: true,
+    weaponRange: null,
     weaponSkill: null
   },
   small_mana_potion: {
     armor: null,
     attack: null,
+    ammoType: null,
     containerSize: null,
+    compatibleCharacterClasses: undefined,
     defense: null,
     foodSeconds: null,
     healthRestore: null,
     isContainer: false,
     itemKey: "small_mana_potion",
     itemType: "consumable",
+    maxStack: null,
     manaRestore: 20,
     name: "Small Mana Potion",
+    requiredAmmoType: null,
     shieldDefenseModifier: null,
     stackable: true,
+    weaponRange: null,
     weaponSkill: null
   }
 };
@@ -1215,7 +1411,7 @@ export interface CombatStartedEvent {
 
 export interface CombatStoppedEvent {
   monsterId?: string;
-  reason: "manual" | "target_dead" | "target_lost" | "out_of_range" | "disconnected";
+  reason: "manual" | "target_dead" | "target_lost" | "out_of_range" | "disconnected" | "invalid_loadout" | "no_ammo";
 }
 
 export interface WorldErrorEvent {

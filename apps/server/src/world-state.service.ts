@@ -11,10 +11,11 @@ import type {
   WorldMonster,
   WorldPlayer
 } from "@aldrym/shared";
-import { itemDefinitions } from "@aldrym/shared";
+import { getItemMaxStack, itemDefinitions } from "@aldrym/shared";
 import { Injectable } from "@nestjs/common";
 
 export interface OnlineWorldPlayer {
+  attackRange: number;
   socketId: string | null;
   connected: boolean;
   userId: string;
@@ -169,7 +170,7 @@ export class WorldStateService {
 
   updatePlayerStats(
     socketId: string,
-    stats: Pick<WorldPlayer, "level" | "health" | "maxHealth" | "mana" | "maxMana">
+    stats: Pick<WorldPlayer, "level" | "health" | "maxHealth" | "mana" | "maxMana"> & { attackRange?: number }
   ): OnlineWorldPlayer | null {
     const player = this.getPlayerBySocketId(socketId);
 
@@ -182,12 +183,13 @@ export class WorldStateService {
     player.maxHealth = stats.maxHealth;
     player.mana = stats.mana;
     player.maxMana = stats.maxMana;
+    player.attackRange = stats.attackRange ?? player.attackRange;
     return player;
   }
 
   updatePlayerStatsByCharacterId(
     characterId: string,
-    stats: Pick<WorldPlayer, "level" | "health" | "maxHealth" | "mana" | "maxMana">
+    stats: Pick<WorldPlayer, "level" | "health" | "maxHealth" | "mana" | "maxMana"> & { attackRange?: number }
   ): OnlineWorldPlayer | null {
     const player = this.getPlayerByCharacterId(characterId);
 
@@ -200,6 +202,7 @@ export class WorldStateService {
     player.maxHealth = stats.maxHealth;
     player.mana = stats.mana;
     player.maxMana = stats.maxMana;
+    player.attackRange = stats.attackRange ?? player.attackRange;
     return player;
   }
 
@@ -469,24 +472,45 @@ export class WorldStateService {
       return null;
     }
 
-    const existingItem = item.stackable ? corpse.items.find((corpseItem) => corpseItem.itemKey === item.itemKey) : null;
+    const nextItems = corpse.items.map((corpseItem) => ({ ...corpseItem }));
+    const maxStack = getItemMaxStack(item);
+    let remainingQuantity = item.quantity;
 
-    if (existingItem) {
-      existingItem.quantity += item.quantity;
-      corpse.isEmpty = false;
-      corpse.decayAt = new Date(Date.now() + CORPSE_DECAY_MS).toISOString();
-      return this.cloneCorpse(corpse);
+    if (item.stackable) {
+      for (const existingItem of nextItems.filter((corpseItem) => corpseItem.itemKey === item.itemKey)) {
+        const availableSpace = maxStack === null ? Number.MAX_SAFE_INTEGER : Math.max(0, maxStack - existingItem.quantity);
+
+        if (availableSpace <= 0) {
+          continue;
+        }
+
+        const quantityToMerge = Math.min(remainingQuantity, availableSpace);
+        existingItem.quantity += quantityToMerge;
+        remainingQuantity -= quantityToMerge;
+
+        if (remainingQuantity <= 0 || maxStack === null) {
+          break;
+        }
+      }
     }
 
-    if (corpse.items.length >= CORPSE_SLOT_CAPACITY) {
-      return null;
+    while (remainingQuantity > 0) {
+      if (nextItems.length >= CORPSE_SLOT_CAPACITY) {
+        return null;
+      }
+
+      const stackQuantity = item.stackable && maxStack !== null ? Math.min(maxStack, remainingQuantity) : remainingQuantity;
+
+      nextItems.push({
+        ...item,
+        corpseItemId: `corpse-item-${this.nextCorpseItemId}`,
+        quantity: stackQuantity
+      });
+      this.nextCorpseItemId += 1;
+      remainingQuantity -= stackQuantity;
     }
 
-    corpse.items.push({
-      ...item,
-      corpseItemId: `corpse-item-${this.nextCorpseItemId}`
-    });
-    this.nextCorpseItemId += 1;
+    corpse.items = nextItems;
     corpse.isEmpty = false;
     corpse.decayAt = new Date(Date.now() + CORPSE_DECAY_MS).toISOString();
 
@@ -500,11 +524,18 @@ export class WorldStateService {
       return null;
     }
 
-    if (item.stackable && corpse.items.some((corpseItem) => corpseItem.itemKey === item.itemKey)) {
-      return true;
+    if (!item.stackable) {
+      return corpse.items.length < CORPSE_SLOT_CAPACITY;
     }
 
-    return corpse.items.length < CORPSE_SLOT_CAPACITY;
+    const maxStack = getItemMaxStack(item);
+    const existingStacks = corpse.items.filter((corpseItem) => corpseItem.itemKey === item.itemKey);
+
+    if (maxStack === null) {
+      return existingStacks.length > 0 || corpse.items.length < CORPSE_SLOT_CAPACITY;
+    }
+
+    return existingStacks.some((corpseItem) => corpseItem.quantity < maxStack) || corpse.items.length < CORPSE_SLOT_CAPACITY;
   }
 
   restoreCorpseItem(corpseId: string, item: CorpseItem): Corpse | null {

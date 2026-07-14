@@ -116,7 +116,9 @@ The current Prisma schema covers account authentication, character ownership, pe
 - New characters start with weapon skills, shielding, and fishing at level `10` with `0` stored progress
 - New characters start with magic level `0` and `0` stored progress
 - New characters start at position `x=100`, `y=100`, `z=0`
-- New characters receive a starter backpack, dagger, leather armor, wooden shield, and a small stack of starter potions through character creation or migration
+- New characters receive a starter backpack, leather armor, and a small stack of starter potions through character creation or migration
+- Non-hunter characters start with a dagger and wooden shield equipped
+- Hunter characters start with a bow equipped, a quiver equipped in the shield slot, arrows stored in that quiver, and a crossbow plus bolts in the backpack
 
 ## Constraints
 

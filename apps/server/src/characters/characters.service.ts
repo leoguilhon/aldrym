@@ -1,4 +1,5 @@
 import type {
+  AmmoType,
   CharacterClass,
   CharacterSummary,
   CharacterSkillKey,
@@ -16,6 +17,7 @@ import {
   addSkillProgress,
   equipmentSlots,
   getBaseMaximumHealthForLevel,
+  getItemMaxStack,
   getBaseMaximumManaForLevel,
   getLevelFromExperience,
   getMaximumFoodSeconds,
@@ -59,6 +61,7 @@ const EQUIPMENT_LOCATION = "equipment";
 type InventoryLocation = "root" | "container" | "equipment";
 type InventoryTransaction = Prisma.TransactionClient;
 type CharacterWithEquipment = Character & { items: Pick<CharacterItem, "equipmentSlot" | "itemKey" | "locationType">[] };
+type CharacterIdentity = { id: string; activeWorldSession: boolean; characterClass: CharacterClass };
 
 @Injectable()
 export class CharactersService {
@@ -95,47 +98,118 @@ export class CharactersService {
           }
         });
 
-        await tx.characterItem.createMany({
-          data: [
-            {
+        if (createCharacterDto.characterClass === "hunter") {
+          const equippedQuiver = await tx.characterItem.create({
+            data: {
               characterId: createdCharacter.id,
-              itemKey: "dagger",
-              quantity: 1,
-              locationType: EQUIPMENT_LOCATION,
-              equipmentSlot: "weapon"
-            },
-            {
-              characterId: createdCharacter.id,
-              itemKey: "leather_armor",
-              quantity: 1,
-              locationType: EQUIPMENT_LOCATION,
-              equipmentSlot: "body"
-            },
-            {
-              characterId: createdCharacter.id,
-              itemKey: "wooden_shield",
+              itemKey: "quiver",
               quantity: 1,
               locationType: EQUIPMENT_LOCATION,
               equipmentSlot: "shield"
-            },
-            {
-              characterId: createdCharacter.id,
-              itemKey: "small_health_potion",
-              quantity: 5,
-              locationType: CONTAINER_LOCATION,
-              containerItemId: equippedBackpack.id,
-              slotIndex: 0
-            },
-            {
-              characterId: createdCharacter.id,
-              itemKey: "small_mana_potion",
-              quantity: 5,
-              locationType: CONTAINER_LOCATION,
-              containerItemId: equippedBackpack.id,
-              slotIndex: 1
             }
-          ]
-        });
+          });
+
+          await tx.characterItem.createMany({
+            data: [
+              {
+                characterId: createdCharacter.id,
+                itemKey: "bow",
+                quantity: 1,
+                locationType: EQUIPMENT_LOCATION,
+                equipmentSlot: "weapon"
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "leather_armor",
+                quantity: 1,
+                locationType: EQUIPMENT_LOCATION,
+                equipmentSlot: "body"
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "small_health_potion",
+                quantity: 5,
+                locationType: CONTAINER_LOCATION,
+                containerItemId: equippedBackpack.id,
+                slotIndex: 0
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "small_mana_potion",
+                quantity: 5,
+                locationType: CONTAINER_LOCATION,
+                containerItemId: equippedBackpack.id,
+                slotIndex: 1
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "crossbow",
+                quantity: 1,
+                locationType: CONTAINER_LOCATION,
+                containerItemId: equippedBackpack.id,
+                slotIndex: 2
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "bolt",
+                quantity: 50,
+                locationType: CONTAINER_LOCATION,
+                containerItemId: equippedBackpack.id,
+                slotIndex: 3
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "arrow",
+                quantity: 50,
+                locationType: CONTAINER_LOCATION,
+                containerItemId: equippedQuiver.id,
+                slotIndex: 0
+              }
+            ]
+          });
+        } else {
+          await tx.characterItem.createMany({
+            data: [
+              {
+                characterId: createdCharacter.id,
+                itemKey: "dagger",
+                quantity: 1,
+                locationType: EQUIPMENT_LOCATION,
+                equipmentSlot: "weapon"
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "leather_armor",
+                quantity: 1,
+                locationType: EQUIPMENT_LOCATION,
+                equipmentSlot: "body"
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "wooden_shield",
+                quantity: 1,
+                locationType: EQUIPMENT_LOCATION,
+                equipmentSlot: "shield"
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "small_health_potion",
+                quantity: 5,
+                locationType: CONTAINER_LOCATION,
+                containerItemId: equippedBackpack.id,
+                slotIndex: 0
+              },
+              {
+                characterId: createdCharacter.id,
+                itemKey: "small_mana_potion",
+                quantity: 5,
+                locationType: CONTAINER_LOCATION,
+                containerItemId: equippedBackpack.id,
+                slotIndex: 1
+              }
+            ]
+          });
+        }
 
         return createdCharacter;
       });
@@ -236,50 +310,21 @@ export class CharactersService {
       }
 
       const equippedBackpackDefinition = this.assertContainerItem(equippedBackpack);
-      const targetLocation = {
-        locationType: CONTAINER_LOCATION as InventoryLocation,
+      const targetLocation: { locationType: "container"; containerItemId: string; capacity: number } = {
+        locationType: CONTAINER_LOCATION,
         containerItemId: equippedBackpack.id,
         capacity: equippedBackpackDefinition.containerSize ?? 0
       };
 
-      if (definition.stackable) {
-        const existingStack = await tx.characterItem.findFirst({
-          where: this.createLocationWhere(character.id, targetLocation.locationType, targetLocation.containerItemId, definition.itemKey),
-          orderBy: [{ slotIndex: "asc" }, { createdAt: "asc" }, { id: "asc" }]
-        });
-
-        if (existingStack) {
-          await tx.characterItem.update({
-            where: { id: existingStack.id },
-            data: { quantity: existingStack.quantity + normalizedQuantity }
-          });
-          return;
-        }
-      }
-
-      const freeSlot = await this.findFreeSlot(
+      await this.storeNewItemInLocation(
         tx,
         character.id,
+        definition,
+        normalizedQuantity,
         targetLocation.locationType,
         targetLocation.containerItemId,
         targetLocation.capacity
       );
-
-      if (freeSlot !== null) {
-        await tx.characterItem.create({
-          data: {
-            characterId: character.id,
-            itemKey: definition.itemKey,
-            quantity: normalizedQuantity,
-            locationType: targetLocation.locationType,
-            containerItemId: targetLocation.containerItemId,
-            slotIndex: freeSlot
-          }
-        });
-        return;
-      }
-
-      throw new InventoryFullError();
     });
   }
 
@@ -307,7 +352,7 @@ export class CharactersService {
         }
       });
 
-      await this.moveItem(tx, character.id, createdItem, target);
+      await this.moveItem(tx, character, createdItem, target);
     });
   }
 
@@ -321,7 +366,7 @@ export class CharactersService {
 
     await this.prisma.$transaction(async (tx) => {
       const item = await this.getOwnedItem(tx, character.id, itemId);
-      await this.moveItem(tx, character.id, item, target);
+      await this.moveItem(tx, character, item, target);
     });
   }
 
@@ -342,7 +387,7 @@ export class CharactersService {
         throw new InventoryValidationError("That item cannot be equipped.", "item_not_equippable");
       }
 
-      await this.moveItem(tx, character.id, item, {
+      await this.moveItem(tx, character, item, {
         locationType: EQUIPMENT_LOCATION,
         equipmentSlot
       });
@@ -371,7 +416,7 @@ export class CharactersService {
       }
 
       if (target) {
-        await this.moveItem(tx, character.id, item, target);
+        await this.moveItem(tx, character, item, target);
         return;
       }
 
@@ -381,7 +426,7 @@ export class CharactersService {
         throw new InventoryFullError();
       }
 
-      await this.moveItem(tx, character.id, item, {
+      await this.moveItem(tx, character, item, {
         locationType: CONTAINER_LOCATION,
         containerItemId: equippedBackpack.id
       });
@@ -805,9 +850,17 @@ export class CharactersService {
     };
   }
 
+  async consumeAmmoForRangedAttackForUserCharacter(userId: string, characterId: string): Promise<void> {
+    const character = await this.findCharacterIdentityForUser(userId, characterId);
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.consumeAmmoForRangedAttack(tx, character.id);
+    });
+  }
+
   private async moveItem(
     tx: InventoryTransaction,
-    characterId: string,
+    character: CharacterIdentity,
     item: CharacterItem,
     target: InventoryMoveTarget
   ): Promise<void> {
@@ -815,6 +868,7 @@ export class CharactersService {
 
     if (target.locationType === EQUIPMENT_LOCATION) {
       this.assertKnownEquipmentSlot(target.equipmentSlot);
+      this.assertCharacterCanEquipItem(character.characterClass, definition);
 
       if (!definition.compatibleEquipmentSlots?.includes(target.equipmentSlot)) {
         throw new InventoryValidationError(`${definition.name} cannot be equipped there.`, "invalid_equipment_slot");
@@ -822,7 +876,7 @@ export class CharactersService {
 
       const occupiedItem = await tx.characterItem.findFirst({
         where: {
-          characterId,
+          characterId: character.id,
           locationType: EQUIPMENT_LOCATION,
           equipmentSlot: target.equipmentSlot,
           id: { not: item.id }
@@ -847,61 +901,47 @@ export class CharactersService {
 
     const targetLocationType = target.locationType;
     const targetContainerItemId = targetLocationType === CONTAINER_LOCATION ? target.containerItemId.trim() : null;
-    const capacity = await this.getTargetCapacity(tx, characterId, targetLocationType, targetContainerItemId);
+    const capacity = await this.getTargetCapacity(tx, character.id, targetLocationType, targetContainerItemId);
 
     if (targetLocationType === CONTAINER_LOCATION && targetContainerItemId) {
-      await this.assertValidContainerMove(tx, characterId, item, targetContainerItemId);
-    }
-
-    if (definition.stackable) {
-      const existingStack = await tx.characterItem.findFirst({
-        where: {
-          ...this.createLocationWhere(characterId, targetLocationType, targetContainerItemId, definition.itemKey),
-          id: { not: item.id }
-        },
-        orderBy: [{ slotIndex: "asc" }, { createdAt: "asc" }, { id: "asc" }]
-      });
-
-      if (existingStack) {
-        await tx.characterItem.update({
-          where: { id: existingStack.id },
-          data: { quantity: existingStack.quantity + item.quantity }
-        });
-        await tx.characterItem.delete({ where: { id: item.id } });
-        return;
-      }
+      await this.assertValidContainerMove(tx, character.id, item, targetContainerItemId);
     }
 
     const requestedSlotIndex = Number.isInteger(target.slotIndex) ? target.slotIndex : undefined;
-    const nextSlotIndex = requestedSlotIndex ?? (await this.findFreeSlot(tx, characterId, targetLocationType, targetContainerItemId, capacity));
+    const targetItems = await this.listLocationItems(tx, character.id, targetLocationType, targetContainerItemId, item.id);
+    const remainingQuantity = await this.mergeIntoLocationStacks(tx, definition, targetItems, item.quantity);
 
-    if (nextSlotIndex === null || nextSlotIndex === undefined || nextSlotIndex < 0 || nextSlotIndex >= capacity) {
-      throw new InventoryFullError();
+    if (remainingQuantity <= 0) {
+      await tx.characterItem.delete({ where: { id: item.id } });
+      return;
     }
 
-    const occupyingItem = await tx.characterItem.findFirst({
-      where: {
-        characterId,
-        locationType: targetLocationType,
-        containerItemId: targetContainerItemId,
-        slotIndex: nextSlotIndex,
-        id: { not: item.id }
-      }
-    });
-
-    if (occupyingItem) {
-      throw new InventoryValidationError("That slot is already occupied.", "target_slot_occupied");
-    }
+    const stackQuantities = this.createStackQuantities(definition, remainingQuantity);
+    const allocatedSlots = this.allocateLocationSlots(targetItems, capacity, requestedSlotIndex, stackQuantities.length);
 
     await tx.characterItem.update({
       where: { id: item.id },
       data: {
+        quantity: stackQuantities[0],
         locationType: targetLocationType,
         containerItemId: targetContainerItemId,
         equipmentSlot: null,
-        slotIndex: nextSlotIndex
+        slotIndex: allocatedSlots[0]
       }
     });
+
+    if (stackQuantities.length > 1) {
+      await tx.characterItem.createMany({
+        data: stackQuantities.slice(1).map((quantity, index) => ({
+          characterId: character.id,
+          itemKey: definition.itemKey,
+          quantity,
+          locationType: targetLocationType,
+          containerItemId: targetContainerItemId,
+          slotIndex: allocatedSlots[index + 1]
+        }))
+      });
+    }
   }
 
   private async createEquippedLootItem(
@@ -911,6 +951,20 @@ export class CharactersService {
     quantity: number
   ): Promise<void> {
     const compatibleSlots = definition.compatibleEquipmentSlots ?? [];
+    const character = await tx.character.findUnique({
+      where: {
+        id: characterId
+      },
+      select: {
+        characterClass: true
+      }
+    });
+
+    if (!character) {
+      throw new NotFoundException("Character not found");
+    }
+
+    this.assertCharacterCanEquipItem(character.characterClass as CharacterClass, definition);
 
     for (const equipmentSlot of compatibleSlots) {
       const occupiedItem = await tx.characterItem.findFirst({
@@ -957,7 +1011,8 @@ export class CharactersService {
     }
 
     let currentContainer = await this.getOwnedItem(tx, characterId, targetContainerItemId);
-    this.assertContainerItem(currentContainer);
+    const targetContainerDefinition = this.assertContainerItem(currentContainer);
+    this.assertItemCanBeStoredInContainer(this.getItemDefinition(item.itemKey), targetContainerDefinition);
 
     while (currentContainer.containerItemId) {
       if (currentContainer.containerItemId === item.id) {
@@ -986,6 +1041,252 @@ export class CharactersService {
     const containerDefinition = this.assertContainerItem(containerItem);
 
     return containerDefinition.containerSize ?? 0;
+  }
+
+  private async consumeAmmoForRangedAttack(tx: InventoryTransaction, characterId: string): Promise<void> {
+    const weaponItem = await tx.characterItem.findFirst({
+      where: {
+        characterId,
+        locationType: EQUIPMENT_LOCATION,
+        equipmentSlot: "weapon"
+      }
+    });
+
+    if (!weaponItem) {
+      return;
+    }
+
+    const weaponDefinition = this.getItemDefinition(weaponItem.itemKey);
+
+    if (!weaponDefinition.requiredAmmoType) {
+      return;
+    }
+
+    const quiverItem = await tx.characterItem.findFirst({
+      where: {
+        characterId,
+        locationType: EQUIPMENT_LOCATION,
+        equipmentSlot: "shield"
+      }
+    });
+
+    if (!quiverItem || quiverItem.itemKey !== "quiver") {
+      throw new InventoryValidationError(
+        "Equip a quiver in your off-hand before attacking with ranged weapons.",
+        "missing_quiver"
+      );
+    }
+
+    const quiverContents = await tx.characterItem.findMany({
+      where: {
+        characterId,
+        locationType: CONTAINER_LOCATION,
+        containerItemId: quiverItem.id
+      },
+      orderBy: [{ slotIndex: "asc" }, { createdAt: "asc" }, { id: "asc" }]
+    });
+
+    const ammoItem = quiverContents.find(
+      (containerItem) => this.getItemDefinition(containerItem.itemKey).ammoType === weaponDefinition.requiredAmmoType
+    );
+
+    if (!ammoItem) {
+      throw new InventoryValidationError(this.getMissingAmmoMessage(weaponDefinition.requiredAmmoType), "no_ammo");
+    }
+
+    if (ammoItem.quantity > 1) {
+      await tx.characterItem.update({
+        where: {
+          id: ammoItem.id
+        },
+        data: {
+          quantity: ammoItem.quantity - 1
+        }
+      });
+      return;
+    }
+
+    await tx.characterItem.delete({
+      where: {
+        id: ammoItem.id
+      }
+    });
+  }
+
+  private async storeNewItemInLocation(
+    tx: InventoryTransaction,
+    characterId: string,
+    definition: ItemDefinition,
+    quantity: number,
+    locationType: "root" | "container",
+    containerItemId: string | null,
+    capacity: number
+  ): Promise<void> {
+    const locationItems = await this.listLocationItems(tx, characterId, locationType, containerItemId);
+    const remainingQuantity = await this.mergeIntoLocationStacks(tx, definition, locationItems, quantity);
+
+    if (remainingQuantity <= 0) {
+      return;
+    }
+
+    const stackQuantities = this.createStackQuantities(definition, remainingQuantity);
+    const allocatedSlots = this.allocateLocationSlots(locationItems, capacity, undefined, stackQuantities.length);
+
+    await tx.characterItem.createMany({
+      data: stackQuantities.map((stackQuantity, index) => ({
+        characterId,
+        itemKey: definition.itemKey,
+        quantity: stackQuantity,
+        locationType,
+        containerItemId,
+        slotIndex: allocatedSlots[index]
+      }))
+    });
+  }
+
+  private async listLocationItems(
+    tx: InventoryTransaction,
+    characterId: string,
+    locationType: "root" | "container",
+    containerItemId: string | null,
+    excludedItemId?: string
+  ): Promise<CharacterItem[]> {
+    return tx.characterItem.findMany({
+      where: {
+        characterId,
+        locationType,
+        containerItemId,
+        ...(excludedItemId ? { id: { not: excludedItemId } } : {})
+      },
+      orderBy: [{ slotIndex: "asc" }, { createdAt: "asc" }, { id: "asc" }]
+    });
+  }
+
+  private async mergeIntoLocationStacks(
+    tx: InventoryTransaction,
+    definition: ItemDefinition,
+    locationItems: CharacterItem[],
+    quantity: number
+  ): Promise<number> {
+    if (!definition.stackable) {
+      return quantity;
+    }
+
+    const maxStack = getItemMaxStack(definition);
+    let remainingQuantity = quantity;
+
+    for (const stack of locationItems.filter((locationItem) => locationItem.itemKey === definition.itemKey)) {
+      const availableSpace = maxStack === null ? Number.MAX_SAFE_INTEGER : Math.max(0, maxStack - stack.quantity);
+
+      if (availableSpace <= 0) {
+        continue;
+      }
+
+      const quantityToMerge = Math.min(remainingQuantity, availableSpace);
+
+      await tx.characterItem.update({
+        where: {
+          id: stack.id
+        },
+        data: {
+          quantity: stack.quantity + quantityToMerge
+        }
+      });
+
+      remainingQuantity -= quantityToMerge;
+
+      if (remainingQuantity <= 0 || maxStack === null) {
+        return Math.max(0, remainingQuantity);
+      }
+    }
+
+    return remainingQuantity;
+  }
+
+  private createStackQuantities(definition: ItemDefinition, quantity: number): number[] {
+    if (!definition.stackable) {
+      return [quantity];
+    }
+
+    const maxStack = getItemMaxStack(definition);
+
+    if (maxStack === null) {
+      return [quantity];
+    }
+
+    const stackQuantities: number[] = [];
+    let remainingQuantity = quantity;
+
+    while (remainingQuantity > 0) {
+      const nextQuantity = Math.min(maxStack, remainingQuantity);
+      stackQuantities.push(nextQuantity);
+      remainingQuantity -= nextQuantity;
+    }
+
+    return stackQuantities;
+  }
+
+  private allocateLocationSlots(
+    locationItems: CharacterItem[],
+    capacity: number,
+    requestedSlotIndex: number | undefined,
+    requiredSlotCount: number
+  ): number[] {
+    if (requestedSlotIndex !== undefined && (requestedSlotIndex < 0 || requestedSlotIndex >= capacity)) {
+      throw new InventoryFullError();
+    }
+
+    const occupiedSlotIndexes = new Set(locationItems.map((locationItem) => locationItem.slotIndex).filter((slotIndex) => slotIndex !== null));
+    const allocatedSlots: number[] = [];
+
+    if (requestedSlotIndex !== undefined) {
+      if (occupiedSlotIndexes.has(requestedSlotIndex)) {
+        throw new InventoryValidationError("That slot is already occupied.", "target_slot_occupied");
+      }
+
+      allocatedSlots.push(requestedSlotIndex);
+      occupiedSlotIndexes.add(requestedSlotIndex);
+    }
+
+    for (let slotIndex = 0; slotIndex < capacity && allocatedSlots.length < requiredSlotCount; slotIndex += 1) {
+      if (!occupiedSlotIndexes.has(slotIndex)) {
+        allocatedSlots.push(slotIndex);
+        occupiedSlotIndexes.add(slotIndex);
+      }
+    }
+
+    if (allocatedSlots.length < requiredSlotCount) {
+      throw new InventoryFullError();
+    }
+
+    return allocatedSlots;
+  }
+
+  private assertCharacterCanEquipItem(characterClass: CharacterClass, definition: ItemDefinition): void {
+    if (!definition.compatibleCharacterClasses?.includes(characterClass)) {
+      if (definition.compatibleCharacterClasses?.length) {
+        throw new InventoryValidationError(
+          `${definition.name} can only be equipped by ${definition.compatibleCharacterClasses.join(", ")} characters.`,
+          "item_class_restricted"
+        );
+      }
+
+      return;
+    }
+  }
+
+  private assertItemCanBeStoredInContainer(itemDefinition: ItemDefinition, containerDefinition: ItemDefinition): void {
+    if (containerDefinition.itemKey !== "quiver") {
+      return;
+    }
+
+    if (!itemDefinition.ammoType) {
+      throw new InventoryValidationError("Only arrows and bolts can be stored in a quiver.", "invalid_quiver_item");
+    }
+  }
+
+  private getMissingAmmoMessage(ammoType: AmmoType): string {
+    return ammoType === "arrow" ? "You need arrows in your quiver." : "You need bolts in your quiver.";
   }
 
   private async findEquippedBackpack(tx: InventoryTransaction, characterId: string): Promise<CharacterItem | null> {
@@ -1188,17 +1489,22 @@ export class CharactersService {
       itemDefinitions[itemKey] ?? {
         armor: null,
         attack: null,
+        ammoType: null,
+        compatibleCharacterClasses: undefined,
         defense: null,
         foodSeconds: null,
         healthRestore: null,
         itemKey,
+        maxStack: null,
         name: itemKey,
+        requiredAmmoType: null,
         stackable: false,
         itemType: "creature_part",
         isContainer: false,
         containerSize: null,
         manaRestore: null,
         shieldDefenseModifier: null,
+        weaponRange: null,
         weaponSkill: null
       }
     );
@@ -1215,18 +1521,23 @@ export class CharactersService {
       id: item.id,
       armor: definition.armor,
       attack: definition.attack,
+      ammoType: definition.ammoType,
+      compatibleCharacterClasses: definition.compatibleCharacterClasses,
       itemKey: definition.itemKey,
       name: definition.name,
       stackable: definition.stackable,
       defense: definition.defense,
       foodSeconds: definition.foodSeconds,
       healthRestore: definition.healthRestore,
+      maxStack: definition.maxStack,
       itemType: definition.itemType,
       compatibleEquipmentSlots: definition.compatibleEquipmentSlots,
       isContainer: definition.isContainer,
       containerSize: definition.containerSize,
       manaRestore: definition.manaRestore,
+      requiredAmmoType: definition.requiredAmmoType,
       shieldDefenseModifier: definition.shieldDefenseModifier,
+      weaponRange: definition.weaponRange,
       weaponSkill: definition.weaponSkill,
       quantity: item.quantity,
       locationType: item.locationType as InventoryLocation,
@@ -1287,7 +1598,7 @@ export class CharactersService {
   private async findCharacterIdentityForUser(
     userId: string,
     characterId: string
-  ): Promise<{ id: string; activeWorldSession: boolean }> {
+  ): Promise<CharacterIdentity> {
     const character = await this.prisma.character.findFirst({
       where: {
         id: characterId,
@@ -1295,7 +1606,8 @@ export class CharactersService {
       },
       select: {
         id: true,
-        activeWorldSession: true
+        activeWorldSession: true,
+        characterClass: true
       }
     });
 
@@ -1303,6 +1615,9 @@ export class CharactersService {
       throw new NotFoundException("Character not found");
     }
 
-    return character;
+    return {
+      ...character,
+      characterClass: character.characterClass as CharacterClass
+    };
   }
 }

@@ -397,10 +397,14 @@ Even if the art is generated as a standalone image, it should still feel like it
 
 ## 15. Item Icon Quality
 
-Inventory item icons must match the quality bar of the current strongest item assets, especially:
+Inventory item icons must match the quality bar of the current strongest item assets, especially the leather equipment benchmark set:
 
+- `apps/web/public/assets/items/leather_helmet.png`
 - `apps/web/public/assets/items/leather_armor.png`
-- `apps/web/public/assets/items/dagger.png`
+- `apps/web/public/assets/items/leather_legs.png`
+- `apps/web/public/assets/items/leather_boots.png`
+
+Use `apps/web/public/assets/items/dagger.png`, `apps/web/public/assets/items/wooden_shield.png`, and `apps/web/public/assets/items/brown_backpack.png` only as secondary category references after the leather-set bar is already matched.
 
 Use these assets as visual references before accepting or committing any new item icon.
 
@@ -410,19 +414,19 @@ Required item icon traits:
 - strong dark outline and clear silhouette
 - dense hand-pixeled texture, not smooth procedural shapes
 - visible material identity through pixel clusters, scuffs, highlights, seams, chips, grain, glass reflections, or metal shine
-- compact inventory composition that fills the icon space similarly to `leather_armor.png` and `dagger.png`
+- compact inventory composition that fills the icon space similarly to the leather equipment benchmark set, with category-specific support from `dagger.png`, `wooden_shield.png`, or `brown_backpack.png` when relevant
 - readable at native 32x32 size and still attractive when previewed larger
 - consistent contrast, lighting direction, and old-school MMORPG item language
 
 Reject item icons that look:
 
 - flat, vector-like, or made from simple geometric primitives
-- too clean, sparse, or low-detail compared to `leather_armor.png` and `dagger.png`
+- too clean, sparse, or low-detail compared to the leather equipment benchmark set
 - blurry, painterly, realistic, glossy, or modern mobile-game styled
 - undersized inside the 32x32 canvas
 - visually disconnected from the existing item set
 
-When generating new item icons, first generate at high quality, then remove the background, crop to the non-transparent subject, and downscale carefully to 32x32. Always inspect the result next to `leather_armor.png` and `dagger.png` before considering it done.
+When generating new item icons, first generate at high quality, then remove the background, crop to the non-transparent subject, and downscale carefully to 32x32. Always inspect the result next to `leather_helmet.png`, `leather_armor.png`, `leather_legs.png`, and `leather_boots.png` before considering it done. For script-generated or regenerated icons, run `python apps/web/scripts/validate_item_icons.py` as an additional quality gate.
 
 ---
 

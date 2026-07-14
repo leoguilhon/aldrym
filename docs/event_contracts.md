@@ -201,7 +201,7 @@ This document defines the multiplayer world events used by the browser client an
   - Purpose: Confirm that a server-side auto-attack session started.
 - `combat:stopped`
   - Payload: `CombatStoppedEvent`
-  - Shape: `{ monsterId?: string; reason: "manual" | "target_dead" | "target_lost" | "out_of_range" | "disconnected" }`
+  - Shape: `{ monsterId?: string; reason: "manual" | "target_dead" | "target_lost" | "out_of_range" | "disconnected" | "invalid_loadout" | "no_ammo" }`
   - Purpose: Confirm that a server-side auto-attack session stopped.
 - `combat:error`
   - Payload: `CombatErrorEvent`
@@ -218,10 +218,11 @@ This document defines the multiplayer world events used by the browser client an
 - The server keeps live world positions, monster state, and corpse state in memory.
 - Character position is persisted only when a joined socket disconnects, not on every movement step.
 - Corpse interaction requires direct contact: same tile or any adjacent tile, including diagonals. Moving corpse loot to ground also requires the target tile to be within 5 SQM and in line of sight.
-- Monster loot is rolled by the server into corpse contents. Monster corpses have 8 slots; stackable items can merge into an existing matching stack. Player-dropped items become in-memory ground items.
+- Monster loot is rolled by the server into corpse contents. Monster corpses have 8 slots; stackable items can merge into an existing matching stack up to each item's configured stack limit. Player-dropped items become in-memory ground items.
 - Corpse contents decay in memory. Normal corpses last 120 seconds; empty corpses decay after 15 seconds.
 - Character inventory is persisted to PostgreSQL. Each `CharacterItem` row is an item instance with a root, container, or equipment location.
 - The visible carried inventory is the equipped backpack. Basic backpacks are equippable containers with 20 slots, and containers can hold other containers when nested movement is valid.
+- Hunters can also equip a quiver in the shield slot. Quivers have 8 slots, accept only arrows or bolts, and ranged attacks consume matching ammunition directly from the equipped quiver.
 - If no backpack is equipped, corpse loot is accepted only when it can be equipped directly into an empty compatible equipment slot.
-- Stackable items merge only in the same root or container location with the same `itemKey`; non-stackable items remain separate instances.
+- Stackable items merge only in the same root or container location with the same `itemKey`; items with a configured stack limit stop at that cap and spill into additional slots when space is available.
 - Monsters, corpses, and ground items are not persisted to PostgreSQL yet. Character experience, level, health, max health, mana, max mana, skill progression, food timer, and inventory are persisted when they change.
