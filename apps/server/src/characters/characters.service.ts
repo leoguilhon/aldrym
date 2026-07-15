@@ -63,6 +63,13 @@ type InventoryLocation = "root" | "container" | "equipment";
 type InventoryTransaction = Prisma.TransactionClient;
 type CharacterWithEquipment = Character & { items: Pick<CharacterItem, "equipmentSlot" | "itemKey" | "locationType">[] };
 type CharacterIdentity = { id: string; activeWorldSession: boolean; characterClass: CharacterClass };
+interface CharacterItemUseResult {
+  character: CharacterSummary;
+  healthRestored: number;
+  manaRestored: number;
+  message: string;
+  targetCharacterId: string;
+}
 
 @Injectable()
 export class CharactersService {
@@ -758,7 +765,7 @@ export class CharactersService {
     itemId: string,
     targetCharacterId?: string,
     stance: CombatStance = "balanced"
-  ): Promise<{ character: CharacterSummary; message: string; targetCharacterId: string }> {
+  ): Promise<CharacterItemUseResult> {
     const character = await this.findCharacterIdentityForUser(userId, characterId);
 
     const useResult = await this.prisma.$transaction(async (tx) => {
@@ -819,31 +826,6 @@ export class CharactersService {
       const healthGain = nextHealth - currentTargetCharacter.health;
       const manaGain = nextMana - currentTargetCharacter.mana;
 
-      if (foodSeconds <= 0 && healthGain <= 0 && manaGain <= 0) {
-        const isSelfTarget = currentTargetCharacter.id === currentCharacter.id;
-
-        if (healthRestore > 0 && manaRestore > 0) {
-          throw new InventoryValidationError(
-            isSelfTarget ? "Your health and mana are already full." : "That character's health and mana are already full.",
-            "resource_full"
-          );
-        }
-
-        if (healthRestore > 0) {
-          throw new InventoryValidationError(
-            isSelfTarget ? "Your health is already full." : "That character's health is already full.",
-            "health_full"
-          );
-        }
-
-        if (manaRestore > 0) {
-          throw new InventoryValidationError(
-            isSelfTarget ? "Your mana is already full." : "That character's mana is already full.",
-            "mana_full"
-          );
-        }
-      }
-
       if (ownedItem.quantity > 1) {
         await tx.characterItem.update({
           where: {
@@ -865,30 +847,40 @@ export class CharactersService {
         const nextFoodExpiresAt =
           foodSeconds > 0 ? new Date(Date.now() + (existingFoodSeconds + foodSeconds) * 1000) : currentCharacter.foodExpiresAt;
 
-        await tx.character.update({
-          where: {
-            id: currentCharacter.id
-          },
-          data: {
-            foodExpiresAt: nextFoodExpiresAt,
-            health: nextHealth,
-            mana: nextMana
-          }
-        });
+        if (
+          nextFoodExpiresAt?.getTime() !== currentCharacter.foodExpiresAt?.getTime() ||
+          nextHealth !== currentCharacter.health ||
+          nextMana !== currentCharacter.mana
+        ) {
+          await tx.character.update({
+            where: {
+              id: currentCharacter.id
+            },
+            data: {
+              foodExpiresAt: nextFoodExpiresAt,
+              health: nextHealth,
+              mana: nextMana
+            }
+          });
+        }
       } else {
-        await tx.character.update({
-          where: {
-            id: currentTargetCharacter.id
-          },
-          data: {
-            health: nextHealth,
-            mana: nextMana
-          }
-        });
+        if (nextHealth !== currentTargetCharacter.health || nextMana !== currentTargetCharacter.mana) {
+          await tx.character.update({
+            where: {
+              id: currentTargetCharacter.id
+            },
+            data: {
+              health: nextHealth,
+              mana: nextMana
+            }
+          });
+        }
       }
 
       return {
         characterId: currentCharacter.id,
+        healthRestored: healthGain,
+        manaRestored: manaGain,
         message:
           foodSeconds > 0
             ? `You eat the ${definition.name.toLowerCase()}.`
@@ -901,6 +893,8 @@ export class CharactersService {
 
     return {
       character: await this.findByIdForUser(userId, useResult.characterId, stance),
+      healthRestored: useResult.healthRestored,
+      manaRestored: useResult.manaRestored,
       message: useResult.message,
       targetCharacterId: useResult.targetCharacterId
     };

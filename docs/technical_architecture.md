@@ -57,7 +57,8 @@
 - Stackable items merge only when they share the same item key and container location. Non-stackable items remain separate instances. Small health and mana potions now cap at 100 per slot.
 - The current MVP treats the equipped backpack as the carried inventory, with persisted equipment slots and item-defined container capacities such as the 20-slot basic backpack.
 - Food consumption is authoritative. Edible items add to a persisted food timer up to a 1,200-second cap, and a server tick regenerates health and mana over time while a character is fed.
-- Restorative potion use is target-based. The client enters a character-targeting mode, sends the selected character id, and the server either applies the potion immediately when the target is valid and adjacent or drives an autowalk-to-adjacency step before consuming the item.
+- Restorative potion use is target-based. The client enters a character-targeting mode, sends the selected character id, and the server either applies the potion immediately when the target is valid and adjacent or drives an autowalk-to-adjacency step before consuming the item. Potions remain consumable at full health or mana, and successful restorative gains now produce an explicit server event for client-side floating heal feedback.
+- The browser client reconnects automatically and requests a fresh authoritative world snapshot after reconnects or when returning from a backgrounded tab, so player positions and other world state stay aligned with the backend.
 - Player death and respawn are not implemented yet. Incoming damage currently clamps health at `1` as a temporary safeguard while the death loop is still pending.
 ## World Safety and Combat Controls
 

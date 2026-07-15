@@ -200,7 +200,7 @@ export class MainScene extends Phaser.Scene {
   private hoveredGroundItemId: string | null = null;
   private pendingAutoInteraction: AutoInteraction | null = null;
   private characterUseTargetMarker: Phaser.GameObjects.Graphics | null = null;
-  private hoveredCharacterUseTile: Position | null = null;
+  private characterUseCursorWorldPoint: { x: number; y: number } | null = null;
   private isCharacterUseTargetingActive = false;
 
   constructor(options: MainSceneOptions) {
@@ -353,7 +353,7 @@ export class MainScene extends Phaser.Scene {
 
   setCharacterUseTargeting(active: boolean): void {
     this.isCharacterUseTargetingActive = active;
-    this.hoveredCharacterUseTile = null;
+    this.characterUseCursorWorldPoint = null;
 
     if (active) {
       this.pressedMovementCodes.clear();
@@ -414,6 +414,27 @@ export class MainScene extends Phaser.Scene {
     this.spawnFloatingCombatText(view.container.x, view.container.y - 30, String(damage), "#e64d47");
   }
 
+  showPlayerRestoration(characterId: string, restoration: { health: number; mana: number }): void {
+    const view = this.playerViews.get(characterId);
+
+    if (!view || (restoration.health <= 0 && restoration.mana <= 0)) {
+      return;
+    }
+
+    const baseX = view.container.x;
+    const baseY = view.container.y - 30;
+    const hasHealth = restoration.health > 0;
+    const hasMana = restoration.mana > 0;
+
+    if (hasHealth) {
+      this.spawnFloatingCombatText(baseX + (hasMana ? -8 : 0), baseY, `+${restoration.health}`, "#f05b57");
+    }
+
+    if (hasMana) {
+      this.spawnFloatingCombatText(baseX + (hasHealth ? 8 : 0), baseY - (hasHealth ? 2 : 0), `+${restoration.mana}`, "#58a6ff");
+    }
+  }
+
   showPlayerMiss(characterId: string): void {
     const view = this.playerViews.get(characterId);
 
@@ -463,50 +484,89 @@ export class MainScene extends Phaser.Scene {
     }
 
     if (pointer) {
-      this.hoveredCharacterUseTile = this.getTilePositionFromWorldPoint(pointer.worldX, pointer.worldY);
+      this.characterUseCursorWorldPoint = this.getCharacterUseCursorWorldPoint(pointer.worldX, pointer.worldY);
     }
 
-    if (!this.hoveredCharacterUseTile) {
+    if (!this.characterUseCursorWorldPoint) {
       marker.setVisible(false);
       return;
     }
 
-    const left = this.hoveredCharacterUseTile.x * this.map.tileSize;
-    const top = this.hoveredCharacterUseTile.y * this.map.tileSize;
-    const size = this.map.tileSize;
-    const centerX = left + size / 2;
-    const centerY = top + size / 2;
-    const arrowInset = Math.max(4, Math.floor(size * 0.18));
-    const arrowHalfWidth = Math.max(4, Math.floor(size * 0.16));
-    const arrowDepth = Math.max(6, Math.floor(size * 0.24));
+    const centerX = this.characterUseCursorWorldPoint.x;
+    const centerY = this.characterUseCursorWorldPoint.y;
+    const gap = 5;
+    const arrowHalfWidth = 4;
+    const arrowDepth = 6;
 
     marker.clear();
-    marker.lineStyle(2, 0xf6d582, 0.96);
-    marker.fillStyle(0xf6d582, 0.18);
-    marker.strokeRect(left + 1, top + 1, size - 2, size - 2);
-    marker.fillTriangle(centerX, top + arrowInset + arrowDepth, centerX - arrowHalfWidth, top + arrowInset, centerX + arrowHalfWidth, top + arrowInset);
+    marker.fillStyle(0xffffff, 0.96);
     marker.fillTriangle(
       centerX,
-      top + size - arrowInset - arrowDepth,
+      centerY - gap - arrowDepth,
       centerX - arrowHalfWidth,
-      top + size - arrowInset,
+      centerY - gap,
       centerX + arrowHalfWidth,
-      top + size - arrowInset
+      centerY - gap
     );
-    marker.fillTriangle(left + arrowInset + arrowDepth, centerY, left + arrowInset, centerY - arrowHalfWidth, left + arrowInset, centerY + arrowHalfWidth);
     marker.fillTriangle(
-      left + size - arrowInset - arrowDepth,
+      centerX,
+      centerY + gap + arrowDepth,
+      centerX - arrowHalfWidth,
+      centerY + gap,
+      centerX + arrowHalfWidth,
+      centerY + gap
+    );
+    marker.fillTriangle(
+      centerX - gap - arrowDepth,
       centerY,
-      left + size - arrowInset,
+      centerX - gap,
       centerY - arrowHalfWidth,
-      left + size - arrowInset,
+      centerX - gap,
       centerY + arrowHalfWidth
     );
+    marker.fillTriangle(centerX + gap + arrowDepth, centerY, centerX + gap, centerY - arrowHalfWidth, centerX + gap, centerY + arrowHalfWidth);
+    marker.fillRect(centerX - 1, centerY - 1, 2, 2);
     marker.setVisible(true);
   }
 
   private getPlayerAtTile(position: Position): WorldPlayer | null {
     return this.pendingPlayers.find((player) => this.isSameTile(player, position)) ?? null;
+  }
+
+  private getCharacterUseCursorWorldPoint(worldX: number, worldY: number): { x: number; y: number } | null {
+    const tilePosition = this.getTilePositionFromWorldPoint(worldX, worldY);
+
+    if (!tilePosition) {
+      return null;
+    }
+
+    return { x: worldX, y: worldY };
+  }
+
+  private getCharacterUseTargetAtWorldPoint(worldX: number, worldY: number): WorldPlayer | null {
+    const maximumDeltaX = Math.max(18, Math.floor(this.map.tileSize * 0.6));
+    const maximumTopReach = Math.max(28, Math.floor(this.map.tileSize * 0.95));
+    const maximumBottomReach = Math.max(12, Math.floor(this.map.tileSize * 0.4));
+    const candidates = this.pendingPlayers
+      .map((player) => {
+        const view = this.playerViews.get(player.characterId);
+        const { x, y } = view ? view.container : getTileCenter(this.map, player);
+        const deltaX = Math.abs(worldX - x);
+        const deltaY = worldY - y;
+
+        if (deltaX > maximumDeltaX || deltaY < -maximumTopReach || deltaY > maximumBottomReach) {
+          return null;
+        }
+
+        return {
+          distance: Phaser.Math.Distance.Between(worldX, worldY, x, y - 8),
+          player
+        };
+      })
+      .filter((candidate): candidate is { distance: number; player: WorldPlayer } => candidate !== null)
+      .sort((left, right) => left.distance - right.distance);
+
+    return candidates[0]?.player ?? null;
   }
 
   private drawMap(): void {
@@ -1090,15 +1150,12 @@ export class MainScene extends Phaser.Scene {
         return;
       }
 
-      const targetTile = this.getTilePositionFromWorldPoint(pointer.worldX, pointer.worldY);
-
-      if (!targetTile) {
-        return;
-      }
-
-      this.hoveredCharacterUseTile = targetTile;
+      this.characterUseCursorWorldPoint = this.getCharacterUseCursorWorldPoint(pointer.worldX, pointer.worldY);
       this.syncCharacterUseTargetMarker();
-      const targetPlayer = this.getPlayerAtTile(targetTile);
+      const targetTile = this.getTilePositionFromWorldPoint(pointer.worldX, pointer.worldY);
+      const targetPlayer =
+        this.getCharacterUseTargetAtWorldPoint(pointer.worldX, pointer.worldY) ??
+        (targetTile ? this.getPlayerAtTile(targetTile) : null);
 
       if (!targetPlayer) {
         this.onShowNotice?.("Potions can only be used on your character or another character.");

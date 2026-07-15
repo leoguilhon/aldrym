@@ -102,6 +102,10 @@ export class AldrymGame {
     this.scene.showPlayerDamage(characterId, damage);
   }
 
+  showPlayerRestoration(characterId: string, restoration: { health: number; mana: number }): void {
+    this.scene.showPlayerRestoration(characterId, restoration);
+  }
+
   showPlayerMiss(characterId: string): void {
     this.scene.showPlayerMiss(characterId);
   }

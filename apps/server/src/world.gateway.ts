@@ -3,6 +3,7 @@ import type {
   CardinalDirection,
   CharacterDamagedEvent,
   CharacterMissedEvent,
+  CharacterRestoredEvent,
   CharacterExperienceUpdatedEvent,
   CharacterLevelUpEvent,
   CharacterSummary,
@@ -56,6 +57,7 @@ import type {
   WorldGroundItemsEvent,
   WorldJoinRequest,
   WorldJoinedEvent,
+  WorldSyncRequest,
   WorldMonstersEvent,
   WorldPlayersEvent,
   WorldMonster,
@@ -390,6 +392,28 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     if (isProtectionZone(this.localMap, nextPosition)) {
       this.clearPlayerBattleMode(activePlayer.characterId);
       this.stopCombatSession(client, "target_lost");
+    }
+  }
+
+  @SubscribeMessage(worldEventNames.worldSync)
+  async handleWorldSync(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() _payload?: WorldSyncRequest
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitWorldError(client, "Join the world before synchronizing.", "world_join_required");
+      return;
+    }
+
+    try {
+      const character = await this.charactersService.findByIdForUser(user.id, activePlayer.characterId, activePlayer.combatStance);
+      await this.emitWorldJoinState(client, user.id, character, activePlayer);
+    } catch (error) {
+      this.logger.warn(`Failed world sync for socket ${client.id}: ${error instanceof Error ? error.message : "unknown error"}`);
+      this.emitWorldError(client, "Could not synchronize the world state.", "world_sync_failed");
     }
   }
 
@@ -1954,6 +1978,14 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       if (result.targetCharacterId !== activePlayer.characterId) {
         await this.emitCharacterUseTargetState(result.targetCharacterId);
       }
+
+      if (result.healthRestored > 0 || result.manaRestored > 0) {
+        this.server.emit(worldEventNames.characterRestored, {
+          characterId: result.targetCharacterId,
+          healthRestored: result.healthRestored,
+          manaRestored: result.manaRestored
+        } satisfies CharacterRestoredEvent);
+      }
     } catch (error) {
       this.emitInventoryOperationError(client, error);
     }
@@ -2412,10 +2444,12 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       groundItems: this.worldStateService.listGroundItems()
     };
     const inventoryPayload: InventoryUpdatedEvent = {
-      items: await this.charactersService.listInventoryForUserCharacter(userId, character.id)
+      items: await this.charactersService.listInventoryForUserCharacter(userId, character.id),
+      message: ""
     };
     const equipmentPayload = {
-      slots: await this.charactersService.listEquipmentForUserCharacter(userId, character.id)
+      slots: await this.charactersService.listEquipmentForUserCharacter(userId, character.id),
+      message: ""
     };
 
     client.emit(worldEventNames.worldJoined, joinedPayload);
@@ -2425,8 +2459,16 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     client.emit(worldEventNames.worldGroundItems, groundItemsPayload);
     client.emit(worldEventNames.inventoryUpdated, inventoryPayload);
     client.emit(worldEventNames.equipmentUpdated, equipmentPayload);
+    await this.emitOpenedContainerStates(client, userId, character.id, "");
     client.emit(worldEventNames.characterUpdated, {
       character
+    });
+    client.emit(worldEventNames.characterStatsUpdated, {
+      characterId: character.id,
+      health: character.health,
+      maxHealth: character.maxHealth,
+      mana: character.mana,
+      maxMana: character.maxMana
     });
   }
 

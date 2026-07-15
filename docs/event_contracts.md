@@ -8,6 +8,10 @@ This document defines the multiplayer world events used by the browser client an
   - Payload: `WorldJoinRequest`
   - Shape: `{ characterId: string }`
   - Purpose: Ask the server to join the single shared world with a character owned by the authenticated account.
+- `world:sync`
+  - Payload: `WorldSyncRequest`
+  - Shape: `{}`
+  - Purpose: Ask the server to resend the authoritative world snapshot, inventory, equipment, open containers, and character state for the current socket session.
 - `player:move`
   - Payload: `PlayerMoveRequest`
   - Shape: `{ direction: "up" | "down" | "left" | "right" | "up-left" | "up-right" | "down-left" | "down-right" }`
@@ -55,7 +59,7 @@ This document defines the multiplayer world events used by the browser client an
 - `inventory:use-item`
   - Payload: `InventoryUseItemRequest`
   - Shape: `{ itemId: string; targetCharacterId?: string }`
-  - Purpose: Request using an owned item instance. Food still resolves on the local character, while restorative potions now require a selected character target and may trigger server-driven autowalk until adjacency before the item is consumed.
+  - Purpose: Request using an owned item instance. Food still resolves on the local character, while restorative potions now require a selected character target and may trigger server-driven autowalk until adjacency before the item is consumed, even when the target is already at full health or mana.
 - `ground-item:take`
   - Payload: `GroundItemTakeRequest`
   - Shape: `{ groundItemId: string; target?: InventoryMoveTarget }`
@@ -203,6 +207,10 @@ This document defines the multiplayer world events used by the browser client an
   - Payload: `CharacterDamagedEvent`
   - Shape: `{ characterId: string; damage: number; health: number; maxHealth: number }`
   - Purpose: Notify the local player that a monster attack landed and provide the exact damage value for combat feedback such as floating damage text.
+- `character:restored`
+  - Payload: `CharacterRestoredEvent`
+  - Shape: `{ characterId: string; healthRestored: number; manaRestored: number }`
+  - Purpose: Broadcast authoritative restorative item gains so clients can show floating health and mana healing numbers on the healed character.
 - `character:missed`
   - Payload: `CharacterMissedEvent`
   - Shape: `{ characterId: string }`

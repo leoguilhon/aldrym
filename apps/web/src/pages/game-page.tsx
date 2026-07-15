@@ -2,6 +2,7 @@ import type {
   CardinalDirection,
   CharacterDamagedEvent,
   CharacterMissedEvent,
+  CharacterRestoredEvent,
   CharacterSkillState,
   CharacterSummary,
   ChaseMode,
@@ -588,6 +589,7 @@ function GameViewport({
   groundItems,
   lastCharacterDamage,
   lastCharacterMiss,
+  lastCharacterRestoration,
   lastMonsterDamage,
   lastMonsterMiss,
   localCharacterId,
@@ -615,6 +617,7 @@ function GameViewport({
   groundItems: GroundItem[];
   lastCharacterDamage: { characterId: string; damage: number; nonce: number } | null;
   lastCharacterMiss: { characterId: string; nonce: number } | null;
+  lastCharacterRestoration: { characterId: string; health: number; mana: number; nonce: number } | null;
   lastMonsterDamage: { damage: number; monsterId: string; nonce: number } | null;
   lastMonsterMiss: { monsterId: string; nonce: number } | null;
   localCharacterId: string;
@@ -653,6 +656,7 @@ function GameViewport({
     showMonsterDamage: (monsterId: string, damage: number) => void;
     showMonsterMiss: (monsterId: string) => void;
     showPlayerDamage: (characterId: string, damage: number) => void;
+    showPlayerRestoration: (characterId: string, restoration: { health: number; mana: number }) => void;
     showPlayerMiss: (characterId: string) => void;
   } | null>(null);
   const activeCombatMonsterIdRef = useRef(activeCombatMonsterId);
@@ -723,6 +727,17 @@ function GameViewport({
 
     gameRef.current?.showPlayerDamage(lastCharacterDamage.characterId, lastCharacterDamage.damage);
   }, [lastCharacterDamage]);
+
+  useEffect(() => {
+    if (!lastCharacterRestoration) {
+      return;
+    }
+
+    gameRef.current?.showPlayerRestoration(lastCharacterRestoration.characterId, {
+      health: lastCharacterRestoration.health,
+      mana: lastCharacterRestoration.mana
+    });
+  }, [lastCharacterRestoration]);
 
   useEffect(() => {
     if (!lastCharacterMiss) {
@@ -1445,6 +1460,8 @@ export function GamePage() {
   const { setActiveWorldCharacterId, setCanReturnToCharacterHall, token } = useAuth();
   const draggedGroundItemIdRef = useRef<string | null>(null);
   const containerWorkspaceRef = useRef<HTMLDivElement | null>(null);
+  const connectionStateRef = useRef<WorldConnectionState>("connecting");
+  const lastWorldSyncRequestAtRef = useRef(0);
   const socketRef = useRef<Socket<WorldServerToClientEvents, WorldClientToServerEvents> | null>(null);
   const [activeCombatMonsterId, setActiveCombatMonsterId] = useState<string | null>(null);
   const [chaseMode, setChaseMode] = useState<ChaseMode>("stand");
@@ -1467,6 +1484,12 @@ export function GamePage() {
   const [isLoadingCharacter, setIsLoadingCharacter] = useState(true);
   const [lastCharacterDamage, setLastCharacterDamage] = useState<{ characterId: string; damage: number; nonce: number } | null>(null);
   const [lastCharacterMiss, setLastCharacterMiss] = useState<{ characterId: string; nonce: number } | null>(null);
+  const [lastCharacterRestoration, setLastCharacterRestoration] = useState<{
+    characterId: string;
+    health: number;
+    mana: number;
+    nonce: number;
+  } | null>(null);
   const [lastMonsterDamage, setLastMonsterDamage] = useState<{ damage: number; monsterId: string; nonce: number } | null>(null);
   const [lastMonsterMiss, setLastMonsterMiss] = useState<{ monsterId: string; nonce: number } | null>(null);
   const [lootErrorMessage, setLootErrorMessage] = useState<string | null>(null);
@@ -1475,6 +1498,10 @@ export function GamePage() {
   const [pendingCharacterUseItem, setPendingCharacterUseItem] = useState<Pick<InventoryItem, "id" | "name"> | null>(null);
   const [players, setPlayers] = useState<WorldPlayer[]>([]);
   const [worldErrorMessage, setWorldErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    connectionStateRef.current = connectionState;
+  }, [connectionState]);
 
   useEffect(() => {
     if (!token || !characterId) {
@@ -1523,9 +1550,50 @@ export function GamePage() {
 
     const socket = io(getApiBaseUrl(), {
       auth: { token },
-      reconnection: false,
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionDelayMax: 5000,
       transports: ["websocket"]
     });
+
+    const requestWorldSync = (): void => {
+      if (!socket.connected) {
+        setConnectionState("connecting");
+        socket.connect();
+        return;
+      }
+
+      if (connectionStateRef.current !== "joined") {
+        return;
+      }
+
+      const now = Date.now();
+
+      if (now - lastWorldSyncRequestAtRef.current < 750) {
+        return;
+      }
+
+      lastWorldSyncRequestAtRef.current = now;
+      socket.emit(worldEventNames.worldSync);
+    };
+
+    const handleVisibilityChange = (): void => {
+      if (document.visibilityState === "visible") {
+        requestWorldSync();
+      }
+    };
+
+    const handleWindowFocus = (): void => {
+      requestWorldSync();
+    };
+
+    const handlePageShow = (): void => {
+      requestWorldSync();
+    };
+
+    const handleBrowserOnline = (): void => {
+      requestWorldSync();
+    };
 
     socketRef.current = socket;
     setActiveCombatMonsterId(null);
@@ -1537,7 +1605,10 @@ export function GamePage() {
     setGroundItems([]);
     setLootErrorMessage(null);
     setLastCharacterDamage(null);
+    setLastCharacterMiss(null);
+    setLastCharacterRestoration(null);
     setLastMonsterDamage(null);
+    setLastMonsterMiss(null);
     setMonsters([]);
     setOpenedCorpses([]);
     setPendingCharacterUseItem(null);
@@ -1556,6 +1627,7 @@ export function GamePage() {
     });
 
     socket.on(worldEventNames.worldJoined, (payload) => {
+      lastWorldSyncRequestAtRef.current = Date.now();
       setConnectionState("joined");
       setActiveWorldCharacterId(payload.player.characterId);
       setPlayers((currentPlayers) => upsertWorldPlayer(currentPlayers, payload.player));
@@ -1723,6 +1795,15 @@ export function GamePage() {
       });
     });
 
+    socket.on(worldEventNames.characterRestored, (payload: CharacterRestoredEvent) => {
+      setLastCharacterRestoration({
+        characterId: payload.characterId,
+        health: payload.healthRestored,
+        mana: payload.manaRestored,
+        nonce: Date.now()
+      });
+    });
+
     socket.on(worldEventNames.characterMissed, (payload: CharacterMissedEvent) => {
       setLastCharacterMiss({
         characterId: payload.characterId,
@@ -1850,7 +1931,10 @@ export function GamePage() {
       setEquipmentItems(equipmentSlots.map((slot) => ({ slot, item: null })));
       setGroundItems([]);
       setLastCharacterDamage(null);
+      setLastCharacterMiss(null);
+      setLastCharacterRestoration(null);
       setLastMonsterDamage(null);
+      setLastMonsterMiss(null);
       setMonsters([]);
       setOpenedCorpses([]);
       setPendingCharacterUseItem(null);
@@ -1861,7 +1945,16 @@ export function GamePage() {
       }
     });
 
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("pageshow", handlePageShow);
+    window.addEventListener("online", handleBrowserOnline);
+
     return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("pageshow", handlePageShow);
+      window.removeEventListener("online", handleBrowserOnline);
       socket.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;
@@ -2585,6 +2678,7 @@ export function GamePage() {
                 groundItems={groundItems}
                 lastCharacterDamage={lastCharacterDamage}
                 lastCharacterMiss={lastCharacterMiss}
+                lastCharacterRestoration={lastCharacterRestoration}
                 lastMonsterDamage={lastMonsterDamage}
                 lastMonsterMiss={lastMonsterMiss}
                 localCharacterId={character.id}

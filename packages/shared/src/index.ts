@@ -1127,6 +1127,8 @@ export interface WorldJoinRequest {
   characterId: string;
 }
 
+export interface WorldSyncRequest {}
+
 export interface WorldJoinedEvent {
   player: WorldPlayer;
 }
@@ -1420,6 +1422,12 @@ export interface CharacterDamagedEvent {
   maxHealth: number;
 }
 
+export interface CharacterRestoredEvent {
+  characterId: string;
+  healthRestored: number;
+  manaRestored: number;
+}
+
 export interface CharacterMissedEvent {
   characterId: string;
 }
@@ -1445,6 +1453,7 @@ export interface CombatErrorEvent {
 
 export interface WorldClientToServerEvents {
   "world:join": (payload: WorldJoinRequest) => void;
+  "world:sync": (payload?: WorldSyncRequest) => void;
   "player:move": (payload: PlayerMoveRequest) => void;
   "player:move-to": (payload: PlayerMoveToRequest) => void;
   "player:turn": (payload: PlayerTurnRequest) => void;
@@ -1505,6 +1514,7 @@ export interface WorldServerToClientEvents {
   "character:stats-updated": (payload: CharacterStatsUpdatedEvent) => void;
   "character:updated": (payload: CharacterUpdatedEvent) => void;
   "character:damaged": (payload: CharacterDamagedEvent) => void;
+  "character:restored": (payload: CharacterRestoredEvent) => void;
   "character:missed": (payload: CharacterMissedEvent) => void;
   "combat:started": (payload: CombatStartedEvent) => void;
   "combat:stopped": (payload: CombatStoppedEvent) => void;
@@ -1514,6 +1524,7 @@ export interface WorldServerToClientEvents {
 
 export const worldEventNames = {
   worldJoin: "world:join",
+  worldSync: "world:sync",
   worldJoined: "world:joined",
   worldPlayers: "world:players",
   worldMonsters: "world:monsters",
@@ -1572,6 +1583,7 @@ export const worldEventNames = {
   characterStatsUpdated: "character:stats-updated",
   characterUpdated: "character:updated",
   characterDamaged: "character:damaged",
+  characterRestored: "character:restored",
   characterMissed: "character:missed",
   combatStarted: "combat:started",
   combatStopped: "combat:stopped",
