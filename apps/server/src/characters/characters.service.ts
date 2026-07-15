@@ -22,6 +22,7 @@ import {
   getLevelFromExperience,
   getMaximumFoodSeconds,
   isItemUsable,
+  requiresCharacterTargetForUse,
   itemDefinitions
 } from "@aldrym/shared";
 import { ConflictException, Inject, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
@@ -755,8 +756,9 @@ export class CharactersService {
     userId: string,
     characterId: string,
     itemId: string,
+    targetCharacterId?: string,
     stance: CombatStance = "balanced"
-  ): Promise<{ character: CharacterSummary; message: string }> {
+  ): Promise<{ character: CharacterSummary; message: string; targetCharacterId: string }> {
     const character = await this.findCharacterIdentityForUser(userId, characterId);
 
     const useResult = await this.prisma.$transaction(async (tx) => {
@@ -765,11 +767,22 @@ export class CharactersService {
       const foodSeconds = definition.foodSeconds ?? 0;
       const healthRestore = Math.max(0, definition.healthRestore ?? 0);
       const manaRestore = Math.max(0, definition.manaRestore ?? 0);
+      const requestedTargetCharacterId = targetCharacterId?.trim();
+      const requiresCharacterTarget = requiresCharacterTargetForUse(definition);
 
       if (!isItemUsable(definition)) {
         throw new InventoryValidationError("That item cannot be used.", "item_not_usable");
       }
 
+      if (requiresCharacterTarget && !requestedTargetCharacterId) {
+        throw new InventoryValidationError("Select a character before using that potion.", "character_target_required");
+      }
+
+      if (foodSeconds > 0 && requestedTargetCharacterId && requestedTargetCharacterId !== character.id) {
+        throw new InventoryValidationError("That item cannot be used on another character.", "invalid_character_target");
+      }
+
+      const effectiveTargetCharacterId = requiresCharacterTarget ? requestedTargetCharacterId ?? character.id : character.id;
       const currentCharacter = await tx.character.findUnique({
         where: {
           id: character.id
@@ -780,6 +793,19 @@ export class CharactersService {
         throw new NotFoundException("Character not found");
       }
 
+      const currentTargetCharacter =
+        effectiveTargetCharacterId === currentCharacter.id
+          ? currentCharacter
+          : await tx.character.findUnique({
+              where: {
+                id: effectiveTargetCharacterId
+              }
+            });
+
+      if (!currentTargetCharacter) {
+        throw new NotFoundException("Target character not found");
+      }
+
       const existingFoodSeconds = currentCharacter.foodExpiresAt
         ? Math.max(0, Math.ceil((currentCharacter.foodExpiresAt.getTime() - Date.now()) / 1000))
         : 0;
@@ -788,22 +814,33 @@ export class CharactersService {
         throw new InventoryValidationError("You are full.", "character_full");
       }
 
-      const nextHealth = Math.min(currentCharacter.maxHealth, currentCharacter.health + healthRestore);
-      const nextMana = Math.min(currentCharacter.maxMana, currentCharacter.mana + manaRestore);
-      const healthGain = nextHealth - currentCharacter.health;
-      const manaGain = nextMana - currentCharacter.mana;
+      const nextHealth = Math.min(currentTargetCharacter.maxHealth, currentTargetCharacter.health + healthRestore);
+      const nextMana = Math.min(currentTargetCharacter.maxMana, currentTargetCharacter.mana + manaRestore);
+      const healthGain = nextHealth - currentTargetCharacter.health;
+      const manaGain = nextMana - currentTargetCharacter.mana;
 
       if (foodSeconds <= 0 && healthGain <= 0 && manaGain <= 0) {
+        const isSelfTarget = currentTargetCharacter.id === currentCharacter.id;
+
         if (healthRestore > 0 && manaRestore > 0) {
-          throw new InventoryValidationError("Your health and mana are already full.", "resource_full");
+          throw new InventoryValidationError(
+            isSelfTarget ? "Your health and mana are already full." : "That character's health and mana are already full.",
+            "resource_full"
+          );
         }
 
         if (healthRestore > 0) {
-          throw new InventoryValidationError("Your health is already full.", "health_full");
+          throw new InventoryValidationError(
+            isSelfTarget ? "Your health is already full." : "That character's health is already full.",
+            "health_full"
+          );
         }
 
         if (manaRestore > 0) {
-          throw new InventoryValidationError("Your mana is already full.", "mana_full");
+          throw new InventoryValidationError(
+            isSelfTarget ? "Your mana is already full." : "That character's mana is already full.",
+            "mana_full"
+          );
         }
       }
 
@@ -824,29 +861,48 @@ export class CharactersService {
         });
       }
 
-      const nextFoodExpiresAt =
-        foodSeconds > 0 ? new Date(Date.now() + (existingFoodSeconds + foodSeconds) * 1000) : currentCharacter.foodExpiresAt;
+      if (currentTargetCharacter.id === currentCharacter.id) {
+        const nextFoodExpiresAt =
+          foodSeconds > 0 ? new Date(Date.now() + (existingFoodSeconds + foodSeconds) * 1000) : currentCharacter.foodExpiresAt;
 
-      await tx.character.update({
-        where: {
-          id: currentCharacter.id
-        },
-        data: {
-          foodExpiresAt: nextFoodExpiresAt,
-          health: nextHealth,
-          mana: nextMana
-        }
-      });
+        await tx.character.update({
+          where: {
+            id: currentCharacter.id
+          },
+          data: {
+            foodExpiresAt: nextFoodExpiresAt,
+            health: nextHealth,
+            mana: nextMana
+          }
+        });
+      } else {
+        await tx.character.update({
+          where: {
+            id: currentTargetCharacter.id
+          },
+          data: {
+            health: nextHealth,
+            mana: nextMana
+          }
+        });
+      }
 
       return {
         characterId: currentCharacter.id,
-        message: `${foodSeconds > 0 ? "You eat" : "You drink"} the ${definition.name.toLowerCase()}.`
+        message:
+          foodSeconds > 0
+            ? `You eat the ${definition.name.toLowerCase()}.`
+            : currentTargetCharacter.id === currentCharacter.id
+              ? `You drink the ${definition.name.toLowerCase()}.`
+              : `You use the ${definition.name.toLowerCase()} on ${currentTargetCharacter.name}.`,
+        targetCharacterId: currentTargetCharacter.id
       };
     });
 
     return {
       character: await this.findByIdForUser(userId, useResult.characterId, stance),
-      message: useResult.message
+      message: useResult.message,
+      targetCharacterId: useResult.targetCharacterId
     };
   }
 

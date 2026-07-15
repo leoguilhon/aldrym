@@ -38,6 +38,7 @@ import {
   getTileType,
   isProtectionZone,
   isItemUsable,
+  requiresCharacterTargetForUse,
   resolveLocalPlayerSpawn,
   worldEventNames
 } from "@aldrym/shared";
@@ -593,6 +594,7 @@ function GameViewport({
   monsters,
   noticeMessage,
   onAttackMonster,
+  onCancelCharacterUseTargeting,
   onDropCorpseItemToGround,
   onDropItemToGround,
   onMoveCorpse,
@@ -601,10 +603,12 @@ function GameViewport({
   onMoveToIntent,
   onTurnIntent,
   onOpenCorpse,
+  onSelectCharacterUseTarget,
   onShowNotice,
   onTakeGroundItem,
   onTakeGroundItemToTarget,
-  players
+  players,
+  isCharacterUseTargeting
 }: {
   activeCombatMonsterId: string | null;
   corpses: Corpse[];
@@ -617,6 +621,7 @@ function GameViewport({
   monsters: WorldMonster[];
   noticeMessage: string | null;
   onAttackMonster: (monsterId: string) => void;
+  onCancelCharacterUseTargeting: () => void;
   onDropCorpseItemToGround: (corpseId: string, corpseItemId: string, quantity: number, position: Position) => void;
   onDropItemToGround: (itemId: string, position: Position) => void;
   onMoveCorpse: (corpseId: string, position: Position) => void;
@@ -625,6 +630,7 @@ function GameViewport({
   onMoveToIntent: (position: Position) => void;
   onTurnIntent: (direction: CardinalDirection) => void;
   onOpenCorpse: (corpseId: string) => void;
+  onSelectCharacterUseTarget: (characterId: string) => void;
   onShowNotice: (message: string) => void;
   onTakeGroundItem: (groundItemId: string) => void;
   onTakeGroundItemToTarget: (
@@ -632,12 +638,14 @@ function GameViewport({
     target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>
   ) => void;
   players: WorldPlayer[];
+  isCharacterUseTargeting: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const gameRef = useRef<{
     destroy: () => void;
     getTilePositionFromClientPoint: (clientX: number, clientY: number) => Position | null;
     setActiveCombatMonsterId: (monsterId: string | null) => void;
+    setCharacterUseTargeting: (active: boolean) => void;
     setCorpses: (nextCorpses: Corpse[]) => void;
     setGroundItems: (nextGroundItems: GroundItem[]) => void;
     setMonsters: (nextMonsters: WorldMonster[]) => void;
@@ -649,13 +657,16 @@ function GameViewport({
   } | null>(null);
   const activeCombatMonsterIdRef = useRef(activeCombatMonsterId);
   const attackMonsterRef = useRef(onAttackMonster);
+  const cancelCharacterUseTargetingRef = useRef(onCancelCharacterUseTargeting);
   const corpsesRef = useRef(corpses);
   const groundItemsRef = useRef(groundItems);
+  const isCharacterUseTargetingRef = useRef(isCharacterUseTargeting);
   const monstersRef = useRef(monsters);
   const moveGroundItemRef = useRef(onMoveGroundItem);
   const moveCorpseRef = useRef(onMoveCorpse);
   const moveIntentRef = useRef(onMoveIntent);
   const moveToIntentRef = useRef(onMoveToIntent);
+  const selectCharacterUseTargetRef = useRef(onSelectCharacterUseTarget);
   const turnIntentRef = useRef(onTurnIntent);
   const openCorpseRef = useRef(onOpenCorpse);
   const playersRef = useRef(players);
@@ -674,6 +685,10 @@ function GameViewport({
   useEffect(() => {
     attackMonsterRef.current = onAttackMonster;
   }, [onAttackMonster]);
+
+  useEffect(() => {
+    cancelCharacterUseTargetingRef.current = onCancelCharacterUseTargeting;
+  }, [onCancelCharacterUseTargeting]);
 
   useEffect(() => {
     corpsesRef.current = corpses;
@@ -739,6 +754,10 @@ function GameViewport({
   }, [onMoveToIntent]);
 
   useEffect(() => {
+    selectCharacterUseTargetRef.current = onSelectCharacterUseTarget;
+  }, [onSelectCharacterUseTarget]);
+
+  useEffect(() => {
     turnIntentRef.current = onTurnIntent;
   }, [onTurnIntent]);
 
@@ -762,6 +781,11 @@ function GameViewport({
     playersRef.current = players;
     gameRef.current?.setPlayers(players);
   }, [players]);
+
+  useEffect(() => {
+    isCharacterUseTargetingRef.current = isCharacterUseTargeting;
+    gameRef.current?.setCharacterUseTargeting(isCharacterUseTargeting);
+  }, [isCharacterUseTargeting]);
 
   useEffect(() => {
     const handleGroundItemDragStart = (event: Event) => {
@@ -793,24 +817,26 @@ function GameViewport({
         return;
       }
 
-      const game = new AldrymGame({
-        activeCombatMonsterId: activeCombatMonsterIdRef.current,
-        corpses: corpsesRef.current,
-        groundItems: groundItemsRef.current,
-        localCharacterId,
-        monsters: monstersRef.current,
-        onAttackMonster: (monsterId) => attackMonsterRef.current(monsterId),
-        onMoveCorpse: (corpseId, position) => moveCorpseRef.current(corpseId, position),
-        onMoveGroundItem: (groundItemId, position) => moveGroundItemRef.current(groundItemId, position),
-        onMoveIntent: (direction) => moveIntentRef.current(direction),
-        onMoveToIntent: (position) => moveToIntentRef.current(position),
-        onTurnIntent: (direction) => turnIntentRef.current(direction),
-        onOpenCorpse: (corpseId) => openCorpseRef.current(corpseId),
-        onShowNotice: (message) => showNoticeRef.current(message),
-        onTakeGroundItem: (groundItemId) => takeGroundItemRef.current(groundItemId),
-        onTakeGroundItemToTarget: (groundItemId, target) => takeGroundItemToTargetRef.current(groundItemId, target),
-        parent: mountElement,
-        players: playersRef.current
+        const game = new AldrymGame({
+          activeCombatMonsterId: activeCombatMonsterIdRef.current,
+          corpses: corpsesRef.current,
+          groundItems: groundItemsRef.current,
+          localCharacterId,
+          monsters: monstersRef.current,
+          onAttackMonster: (monsterId) => attackMonsterRef.current(monsterId),
+          onCancelCharacterUseTargeting: () => cancelCharacterUseTargetingRef.current(),
+          onMoveCorpse: (corpseId, position) => moveCorpseRef.current(corpseId, position),
+          onMoveGroundItem: (groundItemId, position) => moveGroundItemRef.current(groundItemId, position),
+          onMoveIntent: (direction) => moveIntentRef.current(direction),
+          onMoveToIntent: (position) => moveToIntentRef.current(position),
+          onTurnIntent: (direction) => turnIntentRef.current(direction),
+          onOpenCorpse: (corpseId) => openCorpseRef.current(corpseId),
+          onSelectCharacterUseTarget: (characterId) => selectCharacterUseTargetRef.current(characterId),
+          onShowNotice: (message) => showNoticeRef.current(message),
+          onTakeGroundItem: (groundItemId) => takeGroundItemRef.current(groundItemId),
+          onTakeGroundItemToTarget: (groundItemId, target) => takeGroundItemToTargetRef.current(groundItemId, target),
+          parent: mountElement,
+          players: playersRef.current
       });
 
       gameRef.current = game;
@@ -819,6 +845,7 @@ function GameViewport({
       game.setGroundItems(groundItemsRef.current);
       game.setMonsters(monstersRef.current);
       game.setPlayers(playersRef.current);
+      game.setCharacterUseTargeting(isCharacterUseTargetingRef.current);
     }
 
     void mountGame();
@@ -1202,7 +1229,7 @@ function ItemSlot({
   onTakeGroundItemToTarget: (groundItemId: string, target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>) => void;
   onOpenContainer: (containerItemId: string) => void;
   onQuickEquip: (itemId: string) => void;
-  onUseItem: (itemId: string) => void;
+  onUseItem: (item: InventoryItem) => void;
 }) {
   const [dragState, setDragState] = useState<"none" | "valid" | "invalid">("none");
   const target = getItemSlotDropTarget(item, location);
@@ -1214,7 +1241,7 @@ function ItemSlot({
     }
 
     if (isItemUsable(item)) {
-      onUseItem(item.id);
+      onUseItem(item);
       return;
     }
 
@@ -1326,7 +1353,7 @@ function EquipmentPanel({
   onTakeGroundItemToTarget: (groundItemId: string, target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>) => void;
   onOpenContainer: (containerItemId: string) => void;
   onQuickEquip: (itemId: string) => void;
-  onUseItem: (itemId: string) => void;
+  onUseItem: (item: InventoryItem) => void;
 }) {
   return (
     <div className="equipment-paperdoll" role="list">
@@ -1372,7 +1399,7 @@ function BackpackWindow({
   onTakeGroundItemToTarget: (groundItemId: string, target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>) => void;
   onOpenContainer: (containerItemId: string) => void;
   onQuickEquip: (itemId: string) => void;
-  onUseItem: (itemId: string) => void;
+  onUseItem: (item: InventoryItem) => void;
   onWindowDragStart: (event: ReactPointerEvent<HTMLElement>) => void;
 }) {
   const occupiedSlotCount = container.slots.filter((slot) => slot.item).length;
@@ -1445,6 +1472,7 @@ export function GamePage() {
   const [lootErrorMessage, setLootErrorMessage] = useState<string | null>(null);
   const [monsters, setMonsters] = useState<WorldMonster[]>([]);
   const [openedCorpses, setOpenedCorpses] = useState<Corpse[]>([]);
+  const [pendingCharacterUseItem, setPendingCharacterUseItem] = useState<Pick<InventoryItem, "id" | "name"> | null>(null);
   const [players, setPlayers] = useState<WorldPlayer[]>([]);
   const [worldErrorMessage, setWorldErrorMessage] = useState<string | null>(null);
 
@@ -1512,6 +1540,7 @@ export function GamePage() {
     setLastMonsterDamage(null);
     setMonsters([]);
     setOpenedCorpses([]);
+    setPendingCharacterUseItem(null);
     setPlayers([]);
     setWorldErrorMessage(null);
 
@@ -1824,6 +1853,7 @@ export function GamePage() {
       setLastMonsterDamage(null);
       setMonsters([]);
       setOpenedCorpses([]);
+      setPendingCharacterUseItem(null);
       setPlayers([]);
 
       if (reason !== "io client disconnect") {
@@ -1853,6 +1883,27 @@ export function GamePage() {
   }, [feedbackMessage]);
 
   useEffect(() => {
+    if (!pendingCharacterUseItem) {
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== "Escape") {
+        return;
+      }
+
+      event.preventDefault();
+      setPendingCharacterUseItem(null);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [pendingCharacterUseItem]);
+
+  useEffect(() => {
     const intervalId = window.setInterval(() => {
       setClockMs(Date.now());
     }, 1000);
@@ -1866,6 +1917,10 @@ export function GamePage() {
   const localPosition = character ? localPlayer ?? resolveLocalPlayerSpawn(localMap, character) : null;
   const isInBattleMode = localPlayer?.isInBattleMode ?? false;
   const isInProtectionZone = localPosition ? isProtectionZone(localMap, localPosition) : false;
+  const viewportNoticeMessage =
+    pendingCharacterUseItem
+      ? (feedbackMessage ?? `Select your character or another character to use ${pendingCharacterUseItem.name}.`)
+      : feedbackMessage;
   const currentLevelExperience = character ? getExperienceRequiredForLevel(character.level) : 0;
   const nextLevelExperience = character ? getExperienceRequiredForNextLevel(character.level) : 0;
   const experienceWithinLevel = character ? Math.max(0, character.experience - currentLevelExperience) : 0;
@@ -2119,14 +2174,42 @@ export function GamePage() {
     socket.emit(worldEventNames.groundItemTake, { groundItemId, target });
   };
 
-  const handleUseItem = (itemId: string) => {
+  const handleUseItem = (item: InventoryItem) => {
     const socket = socketRef.current;
 
     if (!socket || !socket.connected || connectionState !== "joined") {
       return;
     }
 
-    socket.emit(worldEventNames.inventoryUseItem, { itemId });
+    if (requiresCharacterTargetForUse(item)) {
+      setPendingCharacterUseItem({
+        id: item.id,
+        name: item.name
+      });
+      setFeedbackMessage(null);
+      return;
+    }
+
+    setPendingCharacterUseItem(null);
+    socket.emit(worldEventNames.inventoryUseItem, { itemId: item.id });
+  };
+
+  const handleSelectCharacterUseTarget = (targetCharacterId: string) => {
+    const socket = socketRef.current;
+
+    if (!pendingCharacterUseItem || !socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    socket.emit(worldEventNames.inventoryUseItem, {
+      itemId: pendingCharacterUseItem.id,
+      targetCharacterId
+    });
+    setPendingCharacterUseItem(null);
+  };
+
+  const handleCancelCharacterUseTargeting = () => {
+    setPendingCharacterUseItem(null);
   };
 
   const handleSetCombatStance = (stance: CombatStance) => {
@@ -2329,6 +2412,10 @@ export function GamePage() {
     }
 
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (pendingCharacterUseItem) {
+        return;
+      }
+
       if (event.code !== "Space") {
         return;
       }
@@ -2354,7 +2441,7 @@ export function GamePage() {
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [activeCombatMonsterId, connectionState, localPosition, monsters]);
+  }, [activeCombatMonsterId, connectionState, localPosition, monsters, pendingCharacterUseItem]);
 
   useEffect(() => {
     if (!localPosition) {
@@ -2502,8 +2589,9 @@ export function GamePage() {
                 lastMonsterMiss={lastMonsterMiss}
                 localCharacterId={character.id}
                 monsters={monsters}
-                noticeMessage={feedbackMessage}
+                noticeMessage={viewportNoticeMessage}
                 onAttackMonster={handleAttackMonster}
+                onCancelCharacterUseTargeting={handleCancelCharacterUseTargeting}
                 onDropCorpseItemToGround={handleDropCorpseItemToGround}
                 onDropItemToGround={handleDropItemToGround}
                 onMoveCorpse={handleMoveCorpse}
@@ -2512,9 +2600,11 @@ export function GamePage() {
                 onMoveToIntent={handleMoveToIntent}
                 onTurnIntent={handleTurnIntent}
                 onOpenCorpse={handleOpenCorpse}
+                onSelectCharacterUseTarget={handleSelectCharacterUseTarget}
                 onShowNotice={setFeedbackMessage}
                 onTakeGroundItem={handleTakeGroundItem}
                 onTakeGroundItemToTarget={handleTakeGroundItemToTarget}
+                isCharacterUseTargeting={pendingCharacterUseItem !== null}
                 players={players}
               />
               <div

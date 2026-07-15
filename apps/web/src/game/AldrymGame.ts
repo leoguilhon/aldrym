@@ -21,6 +21,7 @@ export interface AldrymGameOptions {
   localCharacterId: string;
   monsters: WorldMonster[];
   onAttackMonster?: (monsterId: string) => void;
+  onCancelCharacterUseTargeting?: () => void;
   onMoveCorpse?: (corpseId: string, position: Position) => void;
   onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   onTakeGroundItem?: (groundItemId: string) => void;
@@ -29,6 +30,7 @@ export interface AldrymGameOptions {
     target: Extract<InventoryMoveTarget, { locationType: "container" | "equipment" }>
   ) => void;
   onOpenCorpse?: (corpseId: string) => void;
+  onSelectCharacterUseTarget?: (characterId: string) => void;
   onShowNotice?: (message: string) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
   onMoveToIntent?: (position: Position) => void;
@@ -51,12 +53,14 @@ export class AldrymGame {
       map: createLocalMap(),
       monsters: options.monsters,
       onAttackMonster: options.onAttackMonster,
+      onCancelCharacterUseTargeting: options.onCancelCharacterUseTargeting,
       onMoveCorpse: options.onMoveCorpse,
       onMoveGroundItem: options.onMoveGroundItem,
       onMoveIntent: options.onMoveIntent,
       onMoveToIntent: options.onMoveToIntent,
       onTurnIntent: options.onTurnIntent,
       onOpenCorpse: options.onOpenCorpse,
+      onSelectCharacterUseTarget: options.onSelectCharacterUseTarget,
       onShowNotice: options.onShowNotice,
       onTakeGroundItem: options.onTakeGroundItem,
       onTakeGroundItemToTarget: options.onTakeGroundItemToTarget
@@ -108,6 +112,10 @@ export class AldrymGame {
 
   setActiveCombatMonsterId(monsterId: string | null): void {
     this.scene.setActiveCombatMonsterId(monsterId);
+  }
+
+  setCharacterUseTargeting(active: boolean): void {
+    this.scene.setCharacterUseTargeting(active);
   }
 
   destroy(): void {

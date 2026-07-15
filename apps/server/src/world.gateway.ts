@@ -105,6 +105,11 @@ interface CombatSession {
   playerAttackTimer: ReturnType<typeof setInterval>;
 }
 
+interface PendingCharacterItemUse {
+  itemId: string;
+  targetCharacterId: string;
+}
+
 const MONSTER_PURSUIT_RANGE = 8;
 const PLAYER_SCREEN_TILE_HALF_HEIGHT = 5;
 const PLAYER_SCREEN_TILE_HALF_WIDTH = 7;
@@ -164,6 +169,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   private readonly playerFoodExpiresAtBySocketId = new Map<string, number>();
   private readonly playerHealthRegenCarryBySocketId = new Map<string, number>();
   private readonly playerManaRegenCarryBySocketId = new Map<string, number>();
+  private readonly pendingCharacterItemUseBySocketId = new Map<string, PendingCharacterItemUse>();
   private readonly nextMonsterAttackAtByMonsterId = new Map<string, number>();
   private readonly nextMonsterIdleMoveAtByMonsterId = new Map<string, number>();
   private readonly nextPlayerAttackAtBySocketId = new Map<string, number>();
@@ -342,6 +348,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
+    this.clearPendingCharacterItemUse(client.id);
     this.clearPlayerAutowalk(client.id);
     const nextPosition = getNextPosition(activePlayer.position, direction);
 
@@ -416,10 +423,12 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     if (this.isSamePosition(activePlayer.position, targetPosition)) {
+      this.clearPendingCharacterItemUse(client.id);
       this.clearPlayerAutowalk(client.id);
       return;
     }
 
+    this.clearPendingCharacterItemUse(client.id);
     this.playerChaseModeBySocketId.set(client.id, "stand");
     this.playerAutoWalkTargetBySocketId.set(client.id, targetPosition);
     this.performPlayerAutowalkStep(client.id);
@@ -444,6 +453,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
+    this.clearPendingCharacterItemUse(client.id);
     this.clearPlayerAutowalk(client.id);
 
     if (activePlayer.facing === direction) {
@@ -487,6 +497,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
+    this.clearPendingCharacterItemUse(client.id);
     const monster = this.worldStateService.getMonster(monsterId);
 
     if (!monster) {
@@ -1071,6 +1082,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     const user = client.data.user;
     const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
     const itemId = payload?.itemId?.trim();
+    const targetCharacterId = payload?.targetCharacterId?.trim();
 
     if (!user || !activePlayer) {
       this.emitInventoryError(client, "Join the world before using items.", "world_join_required");
@@ -1082,18 +1094,39 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
-    try {
-      const result = await this.charactersService.useItemForUserCharacter(
-        user.id,
-        activePlayer.characterId,
-        itemId,
-        activePlayer.combatStance
-      );
-
-      await this.emitInventoryState(client, user.id, activePlayer.characterId, result.message, result.character);
-    } catch (error) {
-      this.emitInventoryOperationError(client, error);
+    if (!targetCharacterId) {
+      this.clearPendingCharacterItemUse(client.id);
+      await this.executeInventoryItemUse(client, itemId);
+      return;
     }
+
+    const targetPlayer = this.worldStateService.getPlayerByCharacterId(targetCharacterId);
+
+    if (!targetPlayer?.connected || !targetPlayer.socketId) {
+      this.emitInventoryError(client, "That character is no longer available.", "character_target_not_found");
+      return;
+    }
+
+    this.clearPendingCharacterItemUse(client.id);
+
+    if (targetPlayer.characterId === activePlayer.characterId || this.isAdjacent(activePlayer.position, targetPlayer.position)) {
+      await this.executeInventoryItemUse(client, itemId, targetCharacterId);
+      return;
+    }
+
+    const interactionPosition = this.findReachableCharacterUsePosition(client.id, activePlayer.position, targetPlayer.position);
+
+    if (!interactionPosition) {
+      this.emitInventoryError(client, "There is no path to that character.", "character_use_path_not_found");
+      return;
+    }
+
+    this.pendingCharacterItemUseBySocketId.set(client.id, {
+      itemId,
+      targetCharacterId
+    });
+    this.playerAutoWalkTargetBySocketId.set(client.id, interactionPosition);
+    this.performPlayerAutowalkStep(client.id);
   }
 
   @SubscribeMessage(worldEventNames.inventoryUnequipItem)
@@ -1694,6 +1727,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   }
 
   private performPlayerAutowalkTick(): void {
+    this.syncPendingCharacterItemUses();
+
     for (const socketId of this.playerAutoWalkTargetBySocketId.keys()) {
       this.performPlayerAutowalkStep(socketId);
     }
@@ -1724,7 +1759,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
-    const direction = this.findPlayerAutowalkPath(player.position, target)[0];
+    const direction = this.findPlayerAutowalkPath(socketId, player.position, target)[0];
 
     if (!direction) {
       return;
@@ -1732,7 +1767,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
     const nextPosition = getNextPosition(player.position, direction);
 
-    if (!isWalkableTile(this.localMap, nextPosition) || this.worldStateService.isAliveMonsterAt(nextPosition)) {
+    if (
+      !isWalkableTile(this.localMap, nextPosition) ||
+      this.worldStateService.isAliveMonsterAt(nextPosition) ||
+      this.worldStateService.isPlayerAt(nextPosition, socketId)
+    ) {
       return;
     }
 
@@ -1765,10 +1804,10 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
   }
 
-  private findPlayerAutowalkPath(start: Position, target: Position): MoveDirection[] {
+  private findPlayerAutowalkPath(socketId: string, start: Position, target: Position): MoveDirection[] {
     const cardinalPath = findPathToTile({
       allowedDirections: cardinalMoveDirections,
-      isBlocked: (position) => this.worldStateService.isAliveMonsterAt(position),
+      isBlocked: (position) => this.worldStateService.isAliveMonsterAt(position) || this.worldStateService.isPlayerAt(position, socketId),
       map: this.localMap,
       start,
       target
@@ -1779,7 +1818,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     return findPathToTile({
-      isBlocked: (position) => this.worldStateService.isAliveMonsterAt(position),
+      isBlocked: (position) => this.worldStateService.isAliveMonsterAt(position) || this.worldStateService.isPlayerAt(position, socketId),
       map: this.localMap,
       start,
       target
@@ -1788,6 +1827,152 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
   private clearPlayerAutowalk(socketId: string): void {
     this.playerAutoWalkTargetBySocketId.delete(socketId);
+  }
+
+  private clearPendingCharacterItemUse(socketId: string): void {
+    this.pendingCharacterItemUseBySocketId.delete(socketId);
+  }
+
+  private syncPendingCharacterItemUses(): void {
+    for (const [socketId, pendingUse] of this.pendingCharacterItemUseBySocketId.entries()) {
+      const client = this.server.sockets.sockets.get(socketId) as WorldSocket | undefined;
+      const player = this.worldStateService.getPlayerBySocketId(socketId);
+      const targetPlayer = this.worldStateService.getPlayerByCharacterId(pendingUse.targetCharacterId);
+
+      if (!client || !player) {
+        this.clearPendingCharacterItemUse(socketId);
+        this.clearPlayerAutowalk(socketId);
+        continue;
+      }
+
+      if (!targetPlayer?.connected || !targetPlayer.socketId) {
+        this.clearPendingCharacterItemUse(socketId);
+        this.clearPlayerAutowalk(socketId);
+        this.emitInventoryError(client, "That character is no longer available.", "character_target_not_found");
+        continue;
+      }
+
+      if (targetPlayer.characterId === player.characterId || this.isAdjacent(player.position, targetPlayer.position)) {
+        this.clearPendingCharacterItemUse(socketId);
+        this.clearPlayerAutowalk(socketId);
+        void this.executeInventoryItemUse(client, pendingUse.itemId, pendingUse.targetCharacterId);
+        continue;
+      }
+
+      const interactionPosition = this.findReachableCharacterUsePosition(socketId, player.position, targetPlayer.position);
+
+      if (!interactionPosition) {
+        this.clearPendingCharacterItemUse(socketId);
+        this.clearPlayerAutowalk(socketId);
+        this.emitInventoryError(client, "There is no path to that character.", "character_use_path_not_found");
+        continue;
+      }
+
+      this.playerAutoWalkTargetBySocketId.set(socketId, interactionPosition);
+    }
+  }
+
+  private findReachableCharacterUsePosition(socketId: string, player: Position, target: Position): Position | null {
+    if (player.z !== target.z) {
+      return null;
+    }
+
+    const candidates: Array<{ position: Position; pathLength: number }> = [];
+
+    for (let yOffset = -1; yOffset <= 1; yOffset += 1) {
+      for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+        if (xOffset === 0 && yOffset === 0) {
+          continue;
+        }
+
+        const candidate = {
+          x: target.x + xOffset,
+          y: target.y + yOffset,
+          z: target.z
+        };
+
+        if (
+          !isWalkableTile(this.localMap, candidate) ||
+          this.worldStateService.isAliveMonsterAt(candidate) ||
+          this.worldStateService.isPlayerAt(candidate, socketId)
+        ) {
+          continue;
+        }
+
+        if (this.isSamePosition(player, candidate)) {
+          return candidate;
+        }
+
+        const pathLength = this.findPlayerAutowalkPath(socketId, player, candidate).length;
+
+        if (pathLength <= 0) {
+          continue;
+        }
+
+        candidates.push({
+          position: candidate,
+          pathLength
+        });
+      }
+    }
+
+    candidates.sort((left, right) => {
+      if (left.pathLength !== right.pathLength) {
+        return left.pathLength - right.pathLength;
+      }
+
+      return this.getChebyshevDistance(player, left.position) - this.getChebyshevDistance(player, right.position);
+    });
+
+    return candidates[0]?.position ?? null;
+  }
+
+  private async executeInventoryItemUse(
+    client: WorldSocket,
+    itemId: string,
+    targetCharacterId?: string
+  ): Promise<void> {
+    const user = client.data.user;
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!user || !activePlayer) {
+      this.emitInventoryError(client, "Join the world before using items.", "world_join_required");
+      return;
+    }
+
+    try {
+      const result = await this.charactersService.useItemForUserCharacter(
+        user.id,
+        activePlayer.characterId,
+        itemId,
+        targetCharacterId,
+        activePlayer.combatStance
+      );
+
+      await this.emitInventoryState(client, user.id, activePlayer.characterId, result.message, result.character);
+
+      if (result.targetCharacterId !== activePlayer.characterId) {
+        await this.emitCharacterUseTargetState(result.targetCharacterId);
+      }
+    } catch (error) {
+      this.emitInventoryOperationError(client, error);
+    }
+  }
+
+  private async emitCharacterUseTargetState(targetCharacterId: string): Promise<void> {
+    const targetPlayer = this.worldStateService.getPlayerByCharacterId(targetCharacterId);
+
+    if (!targetPlayer?.connected || !targetPlayer.socketId) {
+      return;
+    }
+
+    const targetClient = this.server.sockets.sockets.get(targetPlayer.socketId) as WorldSocket | undefined;
+
+    if (!targetClient) {
+      return;
+    }
+
+    await this.emitCharacterState(targetClient, targetPlayer.userId, targetPlayer.characterId);
   }
 
   private performPlayerFollowTick(): void {
@@ -2179,6 +2364,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
   private releaseSocketState(socketId: string, notifyCombatStop = false): void {
     this.stopCombatSessionBySocketId(socketId, "disconnected", notifyCombatStop);
+    this.clearPendingCharacterItemUse(socketId);
     this.clearPlayerAutowalk(socketId);
     this.nextPlayerAttackAtBySocketId.delete(socketId);
     this.nextPlayerMoveAtBySocketId.delete(socketId);
@@ -2192,6 +2378,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   }
 
   private initializeSocketSessionState(socketId: string, character: CharacterSummary, combatStance: CombatStance): void {
+    this.clearPendingCharacterItemUse(socketId);
     this.clearPlayerAutowalk(socketId);
     this.nextPlayerAttackAtBySocketId.delete(socketId);
     this.nextPlayerMoveAtBySocketId.delete(socketId);

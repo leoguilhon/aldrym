@@ -54,9 +54,10 @@
 - Corpse interaction is intent-based: the client sends only corpse ids, corpse item ids, and requested quantities, and the server validates same-tile or adjacent contact, including diagonals, before writing inventory
 - Ground item interaction is intent-based: dropped items are kept in memory for the current world process, the client sends only item ids, and the server validates ownership on drop plus direct contact on pickup.
 - Character inventory is persisted in PostgreSQL through `CharacterItem`; each row is an item instance located inside a container item or in an equipment slot. Root inventory may exist only as legacy migration state and is not a valid target for new inventory actions.
-- Stackable items merge only when they share the same item key and container location. Non-stackable items remain separate instances.
+- Stackable items merge only when they share the same item key and container location. Non-stackable items remain separate instances. Small health and mana potions now cap at 100 per slot.
 - The current MVP treats the equipped backpack as the carried inventory, with persisted equipment slots and item-defined container capacities such as the 20-slot basic backpack.
 - Food consumption is authoritative. Edible items add to a persisted food timer up to a 1,200-second cap, and a server tick regenerates health and mana over time while a character is fed.
+- Restorative potion use is target-based. The client enters a character-targeting mode, sends the selected character id, and the server either applies the potion immediately when the target is valid and adjacent or drives an autowalk-to-adjacency step before consuming the item.
 - Player death and respawn are not implemented yet. Incoming damage currently clamps health at `1` as a temporary safeguard while the death loop is still pending.
 ## World Safety and Combat Controls
 

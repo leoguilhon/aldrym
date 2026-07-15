@@ -82,12 +82,14 @@ export interface MainSceneOptions {
   map: LocalMapData;
   monsters: WorldMonster[];
   onAttackMonster?: (monsterId: string) => void;
+  onCancelCharacterUseTargeting?: () => void;
   onMoveCorpse?: (corpseId: string, position: Position) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
   onMoveToIntent?: (position: Position) => void;
   onTurnIntent?: (direction: CardinalDirection) => void;
   onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   onOpenCorpse?: (corpseId: string) => void;
+  onSelectCharacterUseTarget?: (characterId: string) => void;
   onShowNotice?: (message: string) => void;
   onTakeGroundItem?: (groundItemId: string) => void;
   onTakeGroundItemToTarget?: (
@@ -163,12 +165,14 @@ export class MainScene extends Phaser.Scene {
   private readonly localCharacterId: string;
   private readonly map: LocalMapData;
   private readonly onAttackMonster?: (monsterId: string) => void;
+  private readonly onCancelCharacterUseTargeting?: () => void;
   private readonly onMoveCorpse?: (corpseId: string, position: Position) => void;
   private readonly onMoveIntent?: (direction: MoveDirection) => void;
   private readonly onMoveToIntent?: (position: Position) => void;
   private readonly onTurnIntent?: (direction: CardinalDirection) => void;
   private readonly onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   private readonly onOpenCorpse?: (corpseId: string) => void;
+  private readonly onSelectCharacterUseTarget?: (characterId: string) => void;
   private readonly onShowNotice?: (message: string) => void;
   private readonly onTakeGroundItem?: (groundItemId: string) => void;
   private readonly onTakeGroundItemToTarget?: (
@@ -195,6 +199,9 @@ export class MainScene extends Phaser.Scene {
   private hoveredCorpseId: string | null = null;
   private hoveredGroundItemId: string | null = null;
   private pendingAutoInteraction: AutoInteraction | null = null;
+  private characterUseTargetMarker: Phaser.GameObjects.Graphics | null = null;
+  private hoveredCharacterUseTile: Position | null = null;
+  private isCharacterUseTargetingActive = false;
 
   constructor(options: MainSceneOptions) {
     super({ key: "main-scene" });
@@ -202,12 +209,14 @@ export class MainScene extends Phaser.Scene {
     this.localCharacterId = options.localCharacterId;
     this.map = options.map;
     this.onAttackMonster = options.onAttackMonster;
+    this.onCancelCharacterUseTargeting = options.onCancelCharacterUseTargeting;
     this.onMoveCorpse = options.onMoveCorpse;
     this.onMoveIntent = options.onMoveIntent;
     this.onMoveToIntent = options.onMoveToIntent;
     this.onTurnIntent = options.onTurnIntent;
     this.onMoveGroundItem = options.onMoveGroundItem;
     this.onOpenCorpse = options.onOpenCorpse;
+    this.onSelectCharacterUseTarget = options.onSelectCharacterUseTarget;
     this.onShowNotice = options.onShowNotice;
     this.onTakeGroundItem = options.onTakeGroundItem;
     this.onTakeGroundItemToTarget = options.onTakeGroundItemToTarget;
@@ -270,6 +279,7 @@ export class MainScene extends Phaser.Scene {
   create(): void {
     this.createDirectionalAnimations();
     this.drawMap();
+    this.createCharacterUseTargetMarker();
     this.createControls();
     this.configureCamera();
     this.isSceneReady = true;
@@ -279,11 +289,13 @@ export class MainScene extends Phaser.Scene {
     this.syncPlayers(this.pendingPlayers);
     window.addEventListener("aldrym:item-drag-start", this.clearMovementInput);
     window.addEventListener("aldrym:ground-item-target-drop", this.handleGroundItemTargetDrop);
+    this.input.on(Phaser.Input.Events.POINTER_MOVE, this.handlePointerMove, this);
     this.input.on(Phaser.Input.Events.POINTER_UP, this.handlePointerUp, this);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.resetCorpseCursor());
     this.events.once(Phaser.Scenes.Events.DESTROY, () => {
       window.removeEventListener("aldrym:item-drag-start", this.clearMovementInput);
       window.removeEventListener("aldrym:ground-item-target-drop", this.handleGroundItemTargetDrop);
+      this.input.off(Phaser.Input.Events.POINTER_MOVE, this.handlePointerMove, this);
       this.input.off(Phaser.Input.Events.POINTER_UP, this.handlePointerUp, this);
       this.resetCorpseCursor();
     });
@@ -333,9 +345,27 @@ export class MainScene extends Phaser.Scene {
 
     if (this.isSceneReady) {
       this.syncPlayers(this.pendingPlayers);
+      this.syncCharacterUseTargetMarker();
       this.syncClickWalkTarget();
       this.flushPendingAutoInteraction();
     }
+  }
+
+  setCharacterUseTargeting(active: boolean): void {
+    this.isCharacterUseTargetingActive = active;
+    this.hoveredCharacterUseTile = null;
+
+    if (active) {
+      this.pressedMovementCodes.clear();
+      this.clickWalkTarget = null;
+      this.pendingAutoInteraction = null;
+      this.setCorpseCursor("none");
+      this.syncCharacterUseTargetMarker(this.input.activePointer);
+      return;
+    }
+
+    this.resetCorpseCursor();
+    this.syncCharacterUseTargetMarker();
   }
 
   setCorpses(corpses: Corpse[]): void {
@@ -416,6 +446,67 @@ export class MainScene extends Phaser.Scene {
       y: tileY,
       z: 0
     };
+  }
+
+  private createCharacterUseTargetMarker(): void {
+    this.characterUseTargetMarker = this.add.graphics();
+    this.characterUseTargetMarker.setDepth(80);
+    this.characterUseTargetMarker.setVisible(false);
+  }
+
+  private syncCharacterUseTargetMarker(pointer?: Phaser.Input.Pointer): void {
+    const marker = this.characterUseTargetMarker;
+
+    if (!marker || !this.isCharacterUseTargetingActive) {
+      marker?.setVisible(false);
+      return;
+    }
+
+    if (pointer) {
+      this.hoveredCharacterUseTile = this.getTilePositionFromWorldPoint(pointer.worldX, pointer.worldY);
+    }
+
+    if (!this.hoveredCharacterUseTile) {
+      marker.setVisible(false);
+      return;
+    }
+
+    const left = this.hoveredCharacterUseTile.x * this.map.tileSize;
+    const top = this.hoveredCharacterUseTile.y * this.map.tileSize;
+    const size = this.map.tileSize;
+    const centerX = left + size / 2;
+    const centerY = top + size / 2;
+    const arrowInset = Math.max(4, Math.floor(size * 0.18));
+    const arrowHalfWidth = Math.max(4, Math.floor(size * 0.16));
+    const arrowDepth = Math.max(6, Math.floor(size * 0.24));
+
+    marker.clear();
+    marker.lineStyle(2, 0xf6d582, 0.96);
+    marker.fillStyle(0xf6d582, 0.18);
+    marker.strokeRect(left + 1, top + 1, size - 2, size - 2);
+    marker.fillTriangle(centerX, top + arrowInset + arrowDepth, centerX - arrowHalfWidth, top + arrowInset, centerX + arrowHalfWidth, top + arrowInset);
+    marker.fillTriangle(
+      centerX,
+      top + size - arrowInset - arrowDepth,
+      centerX - arrowHalfWidth,
+      top + size - arrowInset,
+      centerX + arrowHalfWidth,
+      top + size - arrowInset
+    );
+    marker.fillTriangle(left + arrowInset + arrowDepth, centerY, left + arrowInset, centerY - arrowHalfWidth, left + arrowInset, centerY + arrowHalfWidth);
+    marker.fillTriangle(
+      left + size - arrowInset - arrowDepth,
+      centerY,
+      left + size - arrowInset,
+      centerY - arrowHalfWidth,
+      left + size - arrowInset,
+      centerY + arrowHalfWidth
+    );
+    marker.setVisible(true);
+  }
+
+  private getPlayerAtTile(position: Position): WorldPlayer | null {
+    return this.pendingPlayers.find((player) => this.isSameTile(player, position)) ?? null;
   }
 
   private drawMap(): void {
@@ -980,7 +1071,44 @@ export class MainScene extends Phaser.Scene {
     );
   };
 
+  private readonly handlePointerMove = (pointer: Phaser.Input.Pointer): void => {
+    if (!this.isCharacterUseTargetingActive) {
+      return;
+    }
+
+    this.syncCharacterUseTargetMarker(pointer);
+  };
+
   private readonly handlePointerUp = (pointer: Phaser.Input.Pointer): void => {
+    if (this.isCharacterUseTargetingActive) {
+      if (pointer.button === 2) {
+        this.onCancelCharacterUseTargeting?.();
+        return;
+      }
+
+      if (pointer.button !== 0) {
+        return;
+      }
+
+      const targetTile = this.getTilePositionFromWorldPoint(pointer.worldX, pointer.worldY);
+
+      if (!targetTile) {
+        return;
+      }
+
+      this.hoveredCharacterUseTile = targetTile;
+      this.syncCharacterUseTargetMarker();
+      const targetPlayer = this.getPlayerAtTile(targetTile);
+
+      if (!targetPlayer) {
+        this.onShowNotice?.("Potions can only be used on your character or another character.");
+        return;
+      }
+
+      this.onSelectCharacterUseTarget?.(targetPlayer.characterId);
+      return;
+    }
+
     const corpseId = this.draggedCorpseId;
     const groundItemId = this.draggedGroundItemId;
     this.draggedCorpseId = null;
@@ -1303,6 +1431,10 @@ export class MainScene extends Phaser.Scene {
       this.setCorpseHoverState(corpse.id, false);
     });
     hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (this.isCharacterUseTargetingActive) {
+        return;
+      }
+
       if (pointer.button === 2) {
         const currentCorpse = this.pendingCorpses.find((pendingCorpse) => pendingCorpse.id === corpse.id) ?? corpse;
 
@@ -1378,7 +1510,7 @@ export class MainScene extends Phaser.Scene {
     const canvas = this.game.canvas;
 
     if (canvas) {
-      canvas.style.cursor = cursor;
+      canvas.style.cursor = this.isCharacterUseTargetingActive ? "none" : cursor;
     }
   }
 
@@ -1449,6 +1581,10 @@ export class MainScene extends Phaser.Scene {
       this.setGroundItemHoverState(groundItem.id, false);
     });
     hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (this.isCharacterUseTargetingActive) {
+        return;
+      }
+
       if (pointer.button === 2) {
         const currentGroundItem = this.pendingGroundItems.find((pendingGroundItem) => pendingGroundItem.id === groundItem.id) ?? groundItem;
 
@@ -1665,6 +1801,10 @@ export class MainScene extends Phaser.Scene {
     const container = this.add.container(x, y, [hitArea, tileMarker, shadow, sprite, hud]);
     container.setDepth(40);
     hitArea.on("pointerdown", (pointer: Phaser.Input.Pointer) => {
+      if (this.isCharacterUseTargetingActive) {
+        return;
+      }
+
       if (pointer.button === 2) {
         this.onAttackMonster?.(monster.id);
       }

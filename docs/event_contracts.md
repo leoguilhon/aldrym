@@ -54,8 +54,8 @@ This document defines the multiplayer world events used by the browser client an
   - Purpose: Request dropping an owned item instance on a target ground tile. The server validates that the tile is walkable, within 5 SQM, and has line of sight from the character.
 - `inventory:use-item`
   - Payload: `InventoryUseItemRequest`
-  - Shape: `{ itemId: string }`
-  - Purpose: Request using an owned item instance. The current use flow covers food such as meat and restorative consumables such as health and mana potions through authoritative server-side validation.
+  - Shape: `{ itemId: string; targetCharacterId?: string }`
+  - Purpose: Request using an owned item instance. Food still resolves on the local character, while restorative potions now require a selected character target and may trigger server-driven autowalk until adjacency before the item is consumed.
 - `ground-item:take`
   - Payload: `GroundItemTakeRequest`
   - Shape: `{ groundItemId: string; target?: InventoryMoveTarget }`

@@ -669,6 +669,12 @@ export function isItemUsable(item: Pick<ItemDefinition, "foodSeconds" | "healthR
   return Math.max(0, item?.foodSeconds ?? 0, item?.healthRestore ?? 0, item?.manaRestore ?? 0) > 0;
 }
 
+export function requiresCharacterTargetForUse(
+  item: Pick<ItemDefinition, "healthRestore" | "manaRestore"> | null | undefined
+): boolean {
+  return Math.max(0, item?.healthRestore ?? 0, item?.manaRestore ?? 0) > 0;
+}
+
 export function getItemMaxStack(item: Pick<ItemDefinition, "maxStack" | "stackable"> | null | undefined): number | null {
   if (!item?.stackable) {
     return 1;
@@ -1038,7 +1044,7 @@ export const itemDefinitions: Record<string, ItemDefinition> = {
     isContainer: false,
     itemKey: "small_health_potion",
     itemType: "consumable",
-    maxStack: null,
+    maxStack: 100,
     manaRestore: null,
     name: "Small Health Potion",
     requiredAmmoType: null,
@@ -1059,7 +1065,7 @@ export const itemDefinitions: Record<string, ItemDefinition> = {
     isContainer: false,
     itemKey: "small_mana_potion",
     itemType: "consumable",
-    maxStack: null,
+    maxStack: 100,
     manaRestore: 20,
     name: "Small Mana Potion",
     requiredAmmoType: null,
@@ -1212,6 +1218,7 @@ export interface InventoryEquipItemRequest {
 
 export interface InventoryUseItemRequest {
   itemId: string;
+  targetCharacterId?: string;
 }
 
 export interface InventoryUnequipItemRequest {
