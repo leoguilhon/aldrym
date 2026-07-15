@@ -11,7 +11,11 @@ This document defines the multiplayer world events used by the browser client an
 - `player:move`
   - Payload: `PlayerMoveRequest`
   - Shape: `{ direction: "up" | "down" | "left" | "right" | "up-left" | "up-right" | "down-left" | "down-right" }`
-  - Purpose: Send movement intent only. The server computes the next position and validates collision.
+  - Purpose: Send one manual movement step. The server computes the next position and validates collision.
+- `player:move-to`
+  - Payload: `PlayerMoveToRequest`
+  - Shape: `{ position: Position }`
+  - Purpose: Send a click-to-move destination once. The server owns the autowalk path and step timing, so movement can continue while the browser tab is unfocused.
 - `player:turn`
   - Payload: `PlayerTurnRequest`
   - Shape: `{ direction: "north" | "south" | "east" | "west" }`
@@ -99,6 +103,10 @@ This document defines the multiplayer world events used by the browser client an
   - Payload: `MonsterDamagedEvent`
   - Shape: `{ monsterId: string; health: number; maxHealth: number; damage: number }`
   - Purpose: Broadcast server-authoritative damage and updated monster health.
+- `monster:missed`
+  - Payload: `MonsterMissedEvent`
+  - Shape: `{ monsterId: string }`
+  - Purpose: Broadcast that a player attack dealt no damage so nearby clients can show miss feedback.
 - `monster:died`
   - Payload: `MonsterDiedEvent`
   - Shape: `{ monsterId: string; monster: WorldMonster; experienceReward: number }`
@@ -195,6 +203,10 @@ This document defines the multiplayer world events used by the browser client an
   - Payload: `CharacterDamagedEvent`
   - Shape: `{ characterId: string; damage: number; health: number; maxHealth: number }`
   - Purpose: Notify the local player that a monster attack landed and provide the exact damage value for combat feedback such as floating damage text.
+- `character:missed`
+  - Payload: `CharacterMissedEvent`
+  - Shape: `{ characterId: string }`
+  - Purpose: Notify the local player that an incoming monster attack dealt no damage so the client can show miss feedback.
 - `combat:started`
   - Payload: `CombatStartedEvent`
   - Shape: `{ monsterId: string }`

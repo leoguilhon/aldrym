@@ -31,6 +31,7 @@ export interface AldrymGameOptions {
   onOpenCorpse?: (corpseId: string) => void;
   onShowNotice?: (message: string) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
+  onMoveToIntent?: (position: Position) => void;
   onTurnIntent?: (direction: CardinalDirection) => void;
   parent: HTMLElement;
   players: WorldPlayer[];
@@ -53,6 +54,7 @@ export class AldrymGame {
       onMoveCorpse: options.onMoveCorpse,
       onMoveGroundItem: options.onMoveGroundItem,
       onMoveIntent: options.onMoveIntent,
+      onMoveToIntent: options.onMoveToIntent,
       onTurnIntent: options.onTurnIntent,
       onOpenCorpse: options.onOpenCorpse,
       onShowNotice: options.onShowNotice,
@@ -88,8 +90,16 @@ export class AldrymGame {
     this.scene.showMonsterDamage(monsterId, damage);
   }
 
+  showMonsterMiss(monsterId: string): void {
+    this.scene.showMonsterMiss(monsterId);
+  }
+
   showPlayerDamage(characterId: string, damage: number): void {
     this.scene.showPlayerDamage(characterId, damage);
+  }
+
+  showPlayerMiss(characterId: string): void {
+    this.scene.showPlayerMiss(characterId);
   }
 
   getTilePositionFromClientPoint(clientX: number, clientY: number): Position | null {

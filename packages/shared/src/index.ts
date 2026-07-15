@@ -782,7 +782,7 @@ export const itemDefinitions: Record<string, ItemDefinition> = {
     requiredAmmoType: "arrow",
     shieldDefenseModifier: 0,
     stackable: false,
-    weaponRange: 5,
+    weaponRange: 6,
     weaponSkill: "distance"
   },
   small_axe: {
@@ -1145,6 +1145,10 @@ export interface PlayerMoveRequest {
   direction: MoveDirection;
 }
 
+export interface PlayerMoveToRequest {
+  position: Position;
+}
+
 export interface PlayerTurnRequest {
   direction: CardinalDirection;
 }
@@ -1277,6 +1281,10 @@ export interface MonsterDamagedEvent {
   damage: number;
 }
 
+export interface MonsterMissedEvent {
+  monsterId: string;
+}
+
 export interface MonsterDiedEvent {
   monsterId: string;
   monster: WorldMonster;
@@ -1405,6 +1413,10 @@ export interface CharacterDamagedEvent {
   maxHealth: number;
 }
 
+export interface CharacterMissedEvent {
+  characterId: string;
+}
+
 export interface CombatStartedEvent {
   monsterId: string;
 }
@@ -1427,6 +1439,7 @@ export interface CombatErrorEvent {
 export interface WorldClientToServerEvents {
   "world:join": (payload: WorldJoinRequest) => void;
   "player:move": (payload: PlayerMoveRequest) => void;
+  "player:move-to": (payload: PlayerMoveToRequest) => void;
   "player:turn": (payload: PlayerTurnRequest) => void;
   "combat:attack": (payload: AttackMonsterRequest) => void;
   "combat:stop": (payload?: StopCombatRequest) => void;
@@ -1460,6 +1473,7 @@ export interface WorldServerToClientEvents {
   "player:left": (payload: PlayerLeftEvent) => void;
   "monster:spawned": (payload: MonsterSpawnedEvent) => void;
   "monster:damaged": (payload: MonsterDamagedEvent) => void;
+  "monster:missed": (payload: MonsterMissedEvent) => void;
   "monster:died": (payload: MonsterDiedEvent) => void;
   "monster:moved": (payload: MonsterMovedEvent) => void;
   "monster:respawning": (payload: MonsterRespawningEvent) => void;
@@ -1484,6 +1498,7 @@ export interface WorldServerToClientEvents {
   "character:stats-updated": (payload: CharacterStatsUpdatedEvent) => void;
   "character:updated": (payload: CharacterUpdatedEvent) => void;
   "character:damaged": (payload: CharacterDamagedEvent) => void;
+  "character:missed": (payload: CharacterMissedEvent) => void;
   "combat:started": (payload: CombatStartedEvent) => void;
   "combat:stopped": (payload: CombatStoppedEvent) => void;
   "combat:error": (payload: CombatErrorEvent) => void;
@@ -1499,6 +1514,7 @@ export const worldEventNames = {
   worldGroundItems: "world:ground-items",
   worldError: "world:error",
   playerMove: "player:move",
+  playerMoveTo: "player:move-to",
   playerTurn: "player:turn",
   playerMoved: "player:moved",
   playerJoined: "player:joined",
@@ -1510,6 +1526,7 @@ export const worldEventNames = {
   combatSetPvpMode: "combat:set-pvp-mode",
   monsterSpawned: "monster:spawned",
   monsterDamaged: "monster:damaged",
+  monsterMissed: "monster:missed",
   monsterDied: "monster:died",
   monsterMoved: "monster:moved",
   monsterRespawning: "monster:respawning",
@@ -1548,6 +1565,7 @@ export const worldEventNames = {
   characterStatsUpdated: "character:stats-updated",
   characterUpdated: "character:updated",
   characterDamaged: "character:damaged",
+  characterMissed: "character:missed",
   combatStarted: "combat:started",
   combatStopped: "combat:stopped",
   combatError: "combat:error"
@@ -1748,6 +1766,120 @@ export function getNextPosition(position: Position, direction: MoveDirection): P
     default:
       return position;
   }
+}
+
+function getPathDirectionsToward(
+  current: Position,
+  target: Position,
+  allowedDirections: readonly MoveDirection[]
+): MoveDirection[] {
+  const deltaX = Math.sign(target.x - current.x);
+  const deltaY = Math.sign(target.y - current.y);
+  const preferredDirections: MoveDirection[] = [];
+
+  if (deltaX < 0 && deltaY < 0 && allowedDirections.includes("up-left")) {
+    preferredDirections.push("up-left");
+  } else if (deltaX > 0 && deltaY < 0 && allowedDirections.includes("up-right")) {
+    preferredDirections.push("up-right");
+  } else if (deltaX < 0 && deltaY > 0 && allowedDirections.includes("down-left")) {
+    preferredDirections.push("down-left");
+  } else if (deltaX > 0 && deltaY > 0 && allowedDirections.includes("down-right")) {
+    preferredDirections.push("down-right");
+  }
+
+  if (deltaY < 0 && allowedDirections.includes("up")) {
+    preferredDirections.push("up");
+  } else if (deltaY > 0 && allowedDirections.includes("down")) {
+    preferredDirections.push("down");
+  }
+
+  if (deltaX < 0 && allowedDirections.includes("left")) {
+    preferredDirections.push("left");
+  } else if (deltaX > 0 && allowedDirections.includes("right")) {
+    preferredDirections.push("right");
+  }
+
+  return [...preferredDirections, ...allowedDirections.filter((direction) => !preferredDirections.includes(direction))];
+}
+
+function reconstructPath(
+  cameFrom: Map<string, { direction: MoveDirection; previousKey: string }>,
+  startKey: string,
+  targetKey: string
+): MoveDirection[] {
+  const path: MoveDirection[] = [];
+  let currentKey = targetKey;
+
+  while (currentKey !== startKey) {
+    const step = cameFrom.get(currentKey);
+
+    if (!step) {
+      return [];
+    }
+
+    path.unshift(step.direction);
+    currentKey = step.previousKey;
+  }
+
+  return path;
+}
+
+function getPositionKey(position: Pick<Position, "x" | "y" | "z">): string {
+  return `${position.x}:${position.y}:${position.z}`;
+}
+
+export function findPathToTile(options: {
+  map: LocalMapData;
+  start: Position;
+  target: Position;
+  allowedDirections?: readonly MoveDirection[];
+  isBlocked?: (position: Position) => boolean;
+}): MoveDirection[] {
+  const { isBlocked, map, start, target } = options;
+  const allowedDirections = options.allowedDirections ?? moveDirections;
+
+  if (start.z !== target.z || !isWalkableTile(map, target) || isBlocked?.(target)) {
+    return [];
+  }
+
+  const startKey = getPositionKey(start);
+  const targetKey = getPositionKey(target);
+
+  if (startKey === targetKey) {
+    return [];
+  }
+
+  const queue: Position[] = [start];
+  const visited = new Set<string>([startKey]);
+  const cameFrom = new Map<string, { direction: MoveDirection; previousKey: string }>();
+
+  for (let index = 0; index < queue.length; index += 1) {
+    const current = queue[index];
+    const sortedDirections = getPathDirectionsToward(current, target, allowedDirections);
+
+    for (const direction of sortedDirections) {
+      const nextPosition = getNextPosition(current, direction);
+      const nextKey = getPositionKey(nextPosition);
+
+      if (visited.has(nextKey) || !isWalkableTile(map, nextPosition) || isBlocked?.(nextPosition)) {
+        continue;
+      }
+
+      cameFrom.set(nextKey, {
+        direction,
+        previousKey: getPositionKey(current)
+      });
+
+      if (nextKey === targetKey) {
+        return reconstructPath(cameFrom, startKey, targetKey);
+      }
+
+      visited.add(nextKey);
+      queue.push(nextPosition);
+    }
+  }
+
+  return [];
 }
 
 export function getFacingDirectionForMoveDirection(direction: MoveDirection): CardinalDirection {

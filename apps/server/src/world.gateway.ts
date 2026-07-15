@@ -2,6 +2,7 @@ import type {
   AttackMonsterRequest,
   CardinalDirection,
   CharacterDamagedEvent,
+  CharacterMissedEvent,
   CharacterExperienceUpdatedEvent,
   CharacterLevelUpEvent,
   CharacterSummary,
@@ -34,12 +35,15 @@ import type {
   InventoryUnequipItemRequest,
   InventoryUpdatedEvent,
   MonsterDamagedEvent,
+  MonsterMissedEvent,
   MonsterDiedEvent,
   MonsterMovedEvent,
   MonsterRespawningEvent,
   MonsterRespawnedEvent,
+  MoveDirection,
   PlayerLeftEvent,
   PlayerMoveRequest,
+  PlayerMoveToRequest,
   PlayerMovedEvent,
   PlayerTurnRequest,
   Position,
@@ -54,12 +58,14 @@ import type {
   WorldJoinedEvent,
   WorldMonstersEvent,
   WorldPlayersEvent,
+  WorldMonster,
   WorldServerToClientEvents
 } from "@aldrym/shared";
 import {
   combatStances,
   chaseModes,
   createLocalMap,
+  findPathToTile,
   getFacingDirectionForMoveDirection,
   getRegenerationPerSecond,
   getMovementCooldownMs,
@@ -69,6 +75,7 @@ import {
   isMoveDirection,
   isProtectionZone,
   isWalkableTile,
+  moveDirections,
   resolveLocalPlayerSpawn,
   worldEventNames
 } from "@aldrym/shared";
@@ -101,15 +108,26 @@ interface CombatSession {
 const MONSTER_PURSUIT_RANGE = 8;
 const PLAYER_SCREEN_TILE_HALF_HEIGHT = 5;
 const PLAYER_SCREEN_TILE_HALF_WIDTH = 7;
+const PLAYER_AUTOWALK_TICK_INTERVAL_MS = 100;
 const MONSTER_THINK_INTERVAL_MS = 700;
 const PLAYER_ATTACK_INTERVAL_MS = 2000;
 const MONSTER_ATTACK_INTERVAL_MS = 2000;
+const MONSTER_IDLE_WANDER_MIN_INTERVAL_MS = 1800;
+const MONSTER_IDLE_WANDER_MAX_INTERVAL_MS = 3600;
+const MONSTER_IDLE_WANDER_STAY_CHANCE = 0.35;
 const PLAYER_REGENERATION_INTERVAL_MS = 1000;
 const BATTLE_MODE_DURATION_MS = 60000;
 const RESPAWN_WARNING_MS = 3000;
 const EMPTY_CORPSE_DECAY_MS = 15000;
 const ITEM_THROW_RANGE = 5;
 const CORPSE_MOVE_RANGE = 2;
+const cardinalMoveDirections: MoveDirection[] = ["up", "down", "left", "right"];
+// Tibia-like ranged attacks become much more reliable once the shooter opens space.
+const RANGED_BASE_HIT_CHANCE_BY_DISTANCE = [0, 0.35, 0.52, 0.68, 0.8, 0.89] as const;
+const RANGED_SKILL_BASELINE = 10;
+const RANGED_HIT_CHANCE_PER_SKILL_ABOVE_BASELINE = 0.003;
+const MINIMUM_RANGED_HIT_CHANCE = 0.2;
+const MAXIMUM_RANGED_HIT_CHANCE = 0.97;
 
 type WorldSocket = Socket<
   WorldClientToServerEvents,
@@ -147,10 +165,13 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   private readonly playerHealthRegenCarryBySocketId = new Map<string, number>();
   private readonly playerManaRegenCarryBySocketId = new Map<string, number>();
   private readonly nextMonsterAttackAtByMonsterId = new Map<string, number>();
+  private readonly nextMonsterIdleMoveAtByMonsterId = new Map<string, number>();
   private readonly nextPlayerAttackAtBySocketId = new Map<string, number>();
+  private readonly playerAutoWalkTargetBySocketId = new Map<string, Position>();
   private readonly nextPlayerMoveAtBySocketId = new Map<string, number>();
   private readonly openedContainerIdsBySocketId = new Map<string, Set<string>>();
   private monsterThinkTimer: ReturnType<typeof setInterval> | null = null;
+  private playerAutoWalkTimer: ReturnType<typeof setInterval> | null = null;
   private playerRegenerationTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
@@ -180,6 +201,9 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     this.monsterThinkTimer ??= setInterval(() => {
       void this.performMonsterPursuitTick();
     }, MONSTER_THINK_INTERVAL_MS);
+    this.playerAutoWalkTimer ??= setInterval(() => {
+      this.performPlayerAutowalkTick();
+    }, PLAYER_AUTOWALK_TICK_INTERVAL_MS);
     this.playerRegenerationTimer ??= setInterval(() => {
       void this.performPlayerRegenerationTick();
     }, PLAYER_REGENERATION_INTERVAL_MS);
@@ -318,6 +342,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
+    this.clearPlayerAutowalk(client.id);
     const nextPosition = getNextPosition(activePlayer.position, direction);
 
     if (!isWalkableTile(this.localMap, nextPosition)) {
@@ -361,6 +386,45 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
   }
 
+  @SubscribeMessage(worldEventNames.playerMoveTo)
+  handlePlayerMoveTo(
+    @ConnectedSocket() client: WorldSocket,
+    @MessageBody() payload: PlayerMoveToRequest
+  ): void {
+    const activePlayer = this.worldStateService.getPlayerBySocketId(client.id);
+
+    if (!activePlayer) {
+      this.emitWorldError(client, "Join the world before moving.", "world_join_required");
+      return;
+    }
+
+    const targetPosition = this.normalizeGridPosition(payload?.position);
+
+    if (!targetPosition) {
+      this.emitWorldError(client, "Movement target is invalid.", "invalid_move_target");
+      return;
+    }
+
+    if (targetPosition.z !== activePlayer.position.z) {
+      this.emitWorldError(client, "Movement target is on a different floor.", "invalid_move_target");
+      return;
+    }
+
+    if (!isWalkableTile(this.localMap, targetPosition)) {
+      this.emitWorldError(client, "That tile cannot be reached.", "invalid_move_target");
+      return;
+    }
+
+    if (this.isSamePosition(activePlayer.position, targetPosition)) {
+      this.clearPlayerAutowalk(client.id);
+      return;
+    }
+
+    this.playerChaseModeBySocketId.set(client.id, "stand");
+    this.playerAutoWalkTargetBySocketId.set(client.id, targetPosition);
+    this.performPlayerAutowalkStep(client.id);
+  }
+
   @SubscribeMessage(worldEventNames.playerTurn)
   handlePlayerTurn(
     @ConnectedSocket() client: WorldSocket,
@@ -379,6 +443,8 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       this.emitWorldError(client, "Turn direction is invalid.", "invalid_turn_direction");
       return;
     }
+
+    this.clearPlayerAutowalk(client.id);
 
     if (activePlayer.facing === direction) {
       return;
@@ -443,6 +509,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
+    this.clearPlayerAutowalk(client.id);
     const currentSession = this.combatSessions.get(client.id);
 
     if (currentSession?.monsterId === monster.id) {
@@ -495,6 +562,10 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     if (!payload?.mode || !chaseModes.includes(payload.mode)) {
       this.emitCombatError(client, "That chase mode does not exist.", "invalid_chase_mode");
       return;
+    }
+
+    if (payload.mode === "follow") {
+      this.clearPlayerAutowalk(client.id);
     }
 
     this.playerChaseModeBySocketId.set(client.id, payload.mode);
@@ -574,7 +645,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     const corpseId = payload?.corpseId?.trim();
-    const targetPosition = this.normalizeDropPosition(payload?.position);
+    const targetPosition = this.normalizeGridPosition(payload?.position);
 
     if (!corpseId || !targetPosition) {
       this.emitCorpseError(client, "A corpse and valid tile are required.", "invalid_corpse_move_request");
@@ -775,7 +846,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     const corpseId = payload?.corpseId?.trim();
     const corpseItemId = payload?.corpseItemId?.trim();
     const quantity = Math.floor(payload?.quantity ?? 0);
-    const targetPosition = this.normalizeDropPosition(payload?.position);
+    const targetPosition = this.normalizeGridPosition(payload?.position);
 
     if (!corpseId || !corpseItemId || !targetPosition) {
       this.emitCorpseError(client, "A corpse item and valid drop tile are required.", "invalid_corpse_drop_request");
@@ -1065,7 +1136,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     const itemId = payload?.itemId?.trim();
-    const targetPosition = this.normalizeDropPosition(payload?.position);
+    const targetPosition = this.normalizeGridPosition(payload?.position);
 
     if (!itemId) {
       this.emitInventoryError(client, "An item id is required.", "invalid_item_id");
@@ -1119,7 +1190,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     const groundItemId = payload?.groundItemId?.trim();
-    const targetPosition = this.normalizeDropPosition(payload?.position);
+    const targetPosition = this.normalizeGridPosition(payload?.position);
 
     if (!groundItemId || !targetPosition) {
       this.emitGroundItemError(client, "A ground item and valid tile are required.", "invalid_ground_item_move");
@@ -1395,8 +1466,9 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
     this.nextPlayerAttackAtBySocketId.set(client.id, now + PLAYER_ATTACK_INTERVAL_MS);
     this.startOrRefreshBattleMode(activePlayer.characterId);
-    const rawDamage = this.rollDamage(0, Math.max(0, character.combatStats.attackValue * 2));
-    const armorReduction = this.rollArmorReduction(monster.armor, rawDamage);
+    const isRangedAttack = this.isRangedAttack(character);
+    const rawDamage = this.rollPlayerAttackDamage(character, activePlayer.position, monster, isRangedAttack);
+    const armorReduction = rawDamage > 0 ? this.rollArmorReduction(monster.armor, rawDamage) : 0;
     const damage = Math.max(0, rawDamage - armorReduction);
     const skilledCharacter = await this.charactersService.addSkillProgressForUserCharacter(
       user.id,
@@ -1413,6 +1485,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     if (damage <= 0) {
+      const missedPayload: MonsterMissedEvent = {
+        monsterId: monster.id
+      };
+
+      this.server.emit(worldEventNames.monsterMissed, missedPayload);
       return;
     }
 
@@ -1494,10 +1571,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       this.emitCombatError(client, "The monster was defeated, but experience could not be saved.", "experience_update_failed");
     }
 
+    this.nextMonsterIdleMoveAtByMonsterId.delete(damagedMonster.id);
     this.scheduleMonsterRespawn(damagedMonster.id, damagedMonster.respawnMs);
   }
 
-  private getNextMonsterPosition(monster: Position & { id: string }, target: Position): Position | null {
+  private getNextMonsterPosition(monster: Position & { id: string }, target: Position, attackRange = 1): Position | null {
     const deltaX = target.x - monster.x;
     const deltaY = target.y - monster.y;
     const horizontalStep = deltaX === 0 ? null : { ...monster, x: monster.x + Math.sign(deltaX) };
@@ -1512,23 +1590,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         continue;
       }
 
-      if (this.isSamePosition(candidate, target)) {
+      if (this.getChebyshevDistance(candidate, target) < Math.max(1, Math.floor(attackRange))) {
         continue;
       }
 
-      if (!isWalkableTile(this.localMap, candidate)) {
-        continue;
-      }
-
-      if (isProtectionZone(this.localMap, candidate)) {
-        continue;
-      }
-
-      if (this.worldStateService.isAliveMonsterAt(candidate, monster.id)) {
-        continue;
-      }
-
-      if (this.worldStateService.isPlayerAt(candidate)) {
+      if (!this.canMonsterOccupyTile(candidate, monster.id)) {
         continue;
       }
 
@@ -1553,19 +1619,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
         continue;
       }
 
-      if (!isWalkableTile(this.localMap, candidate)) {
-        continue;
-      }
-
-      if (isProtectionZone(this.localMap, candidate)) {
-        continue;
-      }
-
-      if (this.worldStateService.isAliveMonsterAt(candidate, monster.id)) {
-        continue;
-      }
-
-      if (this.worldStateService.isPlayerAt(candidate)) {
+      if (!this.canMonsterOccupyTile(candidate, monster.id)) {
         continue;
       }
 
@@ -1577,40 +1631,47 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
   private async performMonsterPursuitTick(): Promise<void> {
     const players = this.worldStateService.listPlayers();
-
-    if (players.length === 0) {
-      return;
-    }
+    const attackablePlayers = players.filter((player) => !isProtectionZone(this.localMap, player));
 
     for (const monster of this.worldStateService.listMonsters()) {
       if (!monster.alive) {
         continue;
       }
 
-      const target = this.findNearestPlayerInPursuitRange(
-        monster,
-        players.filter((player) => !isProtectionZone(this.localMap, player))
-      );
+      const target = this.findNearestPlayerInPursuitRange(monster, attackablePlayers);
 
       if (!target) {
+        const idlePosition = this.getIdleMonsterPosition(monster);
+
+        if (idlePosition) {
+          const movedMonster = this.worldStateService.moveMonster(monster.id, idlePosition);
+
+          if (movedMonster) {
+            this.server.emit(worldEventNames.monsterMoved, {
+              monster: movedMonster
+            } satisfies MonsterMovedEvent);
+          }
+        }
+
         continue;
       }
 
       this.startOrRefreshBattleMode(target.characterId);
 
       const isRetreating = monster.retreatAtHealth !== null && monster.health <= monster.retreatAtHealth;
+      const attackRange = this.getMonsterAttackRange(monster);
 
-      if (this.isAdjacent(monster, target) && !isRetreating) {
+      if (this.isWithinMonsterAttackRange(monster, target, attackRange) && !isRetreating) {
         await this.performMonsterAttack(monster, target.characterId);
         continue;
       }
 
       const nextPosition = isRetreating
         ? this.getRetreatMonsterPosition(monster, target)
-        : this.getNextMonsterPosition(monster, target);
+        : this.getNextMonsterPosition(monster, target, attackRange);
 
       if (!nextPosition) {
-        if (this.isAdjacent(monster, target)) {
+        if (this.isWithinMonsterAttackRange(monster, target, attackRange)) {
           await this.performMonsterAttack(monster, target.characterId);
         }
         continue;
@@ -1630,6 +1691,103 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     this.performPlayerFollowTick();
+  }
+
+  private performPlayerAutowalkTick(): void {
+    for (const socketId of this.playerAutoWalkTargetBySocketId.keys()) {
+      this.performPlayerAutowalkStep(socketId);
+    }
+  }
+
+  private performPlayerAutowalkStep(socketId: string): void {
+    const player = this.worldStateService.getPlayerBySocketId(socketId);
+    const target = this.playerAutoWalkTargetBySocketId.get(socketId);
+
+    if (!player || !target) {
+      this.clearPlayerAutowalk(socketId);
+      return;
+    }
+
+    if (player.position.z !== target.z || !isWalkableTile(this.localMap, target)) {
+      this.clearPlayerAutowalk(socketId);
+      return;
+    }
+
+    if (this.isSamePosition(player.position, target)) {
+      this.clearPlayerAutowalk(socketId);
+      return;
+    }
+
+    const now = Date.now();
+
+    if (now < (this.nextPlayerMoveAtBySocketId.get(socketId) ?? 0)) {
+      return;
+    }
+
+    const direction = this.findPlayerAutowalkPath(player.position, target)[0];
+
+    if (!direction) {
+      return;
+    }
+
+    const nextPosition = getNextPosition(player.position, direction);
+
+    if (!isWalkableTile(this.localMap, nextPosition) || this.worldStateService.isAliveMonsterAt(nextPosition)) {
+      return;
+    }
+
+    this.nextPlayerMoveAtBySocketId.set(socketId, now + getMovementCooldownMs(player.level, direction));
+    const movedPlayer = this.worldStateService.updatePlayerPosition(
+      socketId,
+      nextPosition,
+      getFacingDirectionForMoveDirection(direction)
+    );
+
+    if (!movedPlayer) {
+      return;
+    }
+
+    this.server.emit(worldEventNames.playerMoved, {
+      player: this.worldStateService.toWorldPlayer(movedPlayer)
+    });
+
+    if (this.isSamePosition(movedPlayer.position, target)) {
+      this.clearPlayerAutowalk(socketId);
+    }
+
+    if (isProtectionZone(this.localMap, nextPosition)) {
+      this.clearPlayerBattleMode(movedPlayer.characterId);
+      const client = this.server.sockets.sockets.get(socketId) as WorldSocket | undefined;
+
+      if (client) {
+        this.stopCombatSession(client, "target_lost");
+      }
+    }
+  }
+
+  private findPlayerAutowalkPath(start: Position, target: Position): MoveDirection[] {
+    const cardinalPath = findPathToTile({
+      allowedDirections: cardinalMoveDirections,
+      isBlocked: (position) => this.worldStateService.isAliveMonsterAt(position),
+      map: this.localMap,
+      start,
+      target
+    });
+
+    if (cardinalPath.length > 0) {
+      return cardinalPath;
+    }
+
+    return findPathToTile({
+      isBlocked: (position) => this.worldStateService.isAliveMonsterAt(position),
+      map: this.localMap,
+      start,
+      target
+    });
+  }
+
+  private clearPlayerAutowalk(socketId: string): void {
+    this.playerAutoWalkTargetBySocketId.delete(socketId);
   }
 
   private performPlayerFollowTick(): void {
@@ -1764,6 +1922,15 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
           this.syncWorldPlayerState(activePlayer.characterId, updatedCharacter);
         }
       }
+
+      if (client) {
+        const missedPayload: CharacterMissedEvent = {
+          characterId: activePlayer.characterId
+        };
+
+        client.emit(worldEventNames.characterMissed, missedPayload);
+      }
+
       return;
     }
 
@@ -1926,6 +2093,11 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return;
     }
 
+    this.nextMonsterIdleMoveAtByMonsterId.set(
+      monsterId,
+      Date.now() + this.rollDamage(MONSTER_IDLE_WANDER_MIN_INTERVAL_MS, MONSTER_IDLE_WANDER_MAX_INTERVAL_MS)
+    );
+
     const respawnPayload: MonsterRespawnedEvent = {
       monster: respawnedMonster
     };
@@ -2007,6 +2179,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
 
   private releaseSocketState(socketId: string, notifyCombatStop = false): void {
     this.stopCombatSessionBySocketId(socketId, "disconnected", notifyCombatStop);
+    this.clearPlayerAutowalk(socketId);
     this.nextPlayerAttackAtBySocketId.delete(socketId);
     this.nextPlayerMoveAtBySocketId.delete(socketId);
     this.openedContainerIdsBySocketId.delete(socketId);
@@ -2019,6 +2192,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
   }
 
   private initializeSocketSessionState(socketId: string, character: CharacterSummary, combatStance: CombatStance): void {
+    this.clearPlayerAutowalk(socketId);
     this.nextPlayerAttackAtBySocketId.delete(socketId);
     this.nextPlayerMoveAtBySocketId.delete(socketId);
     this.playerCombatStanceBySocketId.set(socketId, combatStance);
@@ -2353,7 +2527,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     this.emitContainerError(client, "The container action could not be completed.", "container_action_failed");
   }
 
-  private normalizeDropPosition(position: Partial<Position> | undefined): Position | null {
+  private normalizeGridPosition(position: Partial<Position> | undefined): Position | null {
     if (!position) {
       return null;
     }
@@ -2478,6 +2652,108 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     return distance !== null && distance <= MONSTER_PURSUIT_RANGE;
   }
 
+  private getMonsterAttackRange(monster: Pick<WorldMonster, "type">): number {
+    switch (monster.type) {
+      case "troll":
+      default:
+        return 1;
+    }
+  }
+
+  private getMonsterIdleRoamRadius(monster: Pick<WorldMonster, "type">): number {
+    switch (monster.type) {
+      case "troll":
+      default:
+        return 2;
+    }
+  }
+
+  private isWithinMonsterAttackRange(monster: Position, target: Position, attackRange: number): boolean {
+    return attackRange <= 1 ? this.isAdjacent(monster, target) : this.isWithinWeaponRange(monster, target, attackRange);
+  }
+
+  private getIdleMonsterPosition(monster: WorldMonster): Position | null {
+    const spawnPosition: Position = {
+      x: monster.spawnX,
+      y: monster.spawnY,
+      z: monster.spawnZ
+    };
+    const idleRoamRadius = this.getMonsterIdleRoamRadius(monster);
+    const distanceFromSpawn = this.getChebyshevDistance(monster, spawnPosition);
+
+    if (distanceFromSpawn > idleRoamRadius) {
+      return this.getReturnToSpawnMonsterPosition(monster, spawnPosition);
+    }
+
+    const now = Date.now();
+    const nextIdleMoveAt = this.nextMonsterIdleMoveAtByMonsterId.get(monster.id) ?? 0;
+
+    if (now < nextIdleMoveAt) {
+      return null;
+    }
+
+    this.nextMonsterIdleMoveAtByMonsterId.set(
+      monster.id,
+      now + this.rollDamage(MONSTER_IDLE_WANDER_MIN_INTERVAL_MS, MONSTER_IDLE_WANDER_MAX_INTERVAL_MS)
+    );
+
+    if (Math.random() < MONSTER_IDLE_WANDER_STAY_CHANCE) {
+      return null;
+    }
+
+    const candidatePositions = this.shuffleArray(
+      moveDirections.map((direction) => getNextPosition(monster, direction))
+    );
+
+    for (const candidate of candidatePositions) {
+      if (!this.canMonsterOccupyTile(candidate, monster.id)) {
+        continue;
+      }
+
+      if (this.getChebyshevDistance(candidate, spawnPosition) > idleRoamRadius) {
+        continue;
+      }
+
+      return candidate;
+    }
+
+    return null;
+  }
+
+  private getReturnToSpawnMonsterPosition(monster: Position & { id: string }, spawnPosition: Position): Position | null {
+    const deltaX = spawnPosition.x - monster.x;
+    const deltaY = spawnPosition.y - monster.y;
+    const horizontalStep = deltaX === 0 ? null : { ...monster, x: monster.x + Math.sign(deltaX) };
+    const verticalStep = deltaY === 0 ? null : { ...monster, y: monster.y + Math.sign(deltaY) };
+    const candidates =
+      Math.abs(deltaX) >= Math.abs(deltaY)
+        ? [horizontalStep, verticalStep]
+        : [verticalStep, horizontalStep];
+
+    for (const candidate of candidates) {
+      if (!candidate) {
+        continue;
+      }
+
+      if (!this.canMonsterOccupyTile(candidate, monster.id)) {
+        continue;
+      }
+
+      return candidate;
+    }
+
+    return null;
+  }
+
+  private canMonsterOccupyTile(position: Position, ignoredMonsterId?: string): boolean {
+    return (
+      isWalkableTile(this.localMap, position) &&
+      !isProtectionZone(this.localMap, position) &&
+      !this.worldStateService.isAliveMonsterAt(position, ignoredMonsterId) &&
+      !this.worldStateService.isPlayerAt(position)
+    );
+  }
+
   private isWithinPlayerScreen(player: Position, target: Position): boolean {
     return (
       player.z === target.z &&
@@ -2491,7 +2767,7 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
       return null;
     }
 
-    return Math.abs(left.x - right.x) + Math.abs(left.y - right.y);
+    return Math.max(Math.abs(left.x - right.x), Math.abs(left.y - right.y));
   }
 
   private isSamePosition(left: Position, right: Position): boolean {
@@ -2504,6 +2780,78 @@ export class WorldGateway implements OnGatewayInit, OnGatewayDisconnect {
     }
 
     return Math.floor(Math.random() * (maximum - minimum + 1)) + minimum;
+  }
+
+  private rollHitChance(chance: number): boolean {
+    return Math.random() < chance;
+  }
+
+  private isRangedAttack(character: CharacterSummary): boolean {
+    return character.combatStats.attackSkill === "distance" && character.combatStats.attackRange > 1;
+  }
+
+  private rollPlayerAttackDamage(
+    character: CharacterSummary,
+    attacker: Position,
+    target: Position,
+    isRangedAttack: boolean
+  ): number {
+    const maximumDamage = Math.max(0, character.combatStats.attackValue * 2);
+
+    if (maximumDamage <= 0) {
+      return 0;
+    }
+
+    if (isRangedAttack) {
+      const hitChance = this.calculateRangedHitChance(character, attacker, target);
+
+      if (!this.rollHitChance(hitChance)) {
+        return 0;
+      }
+
+      return this.rollDamage(1, maximumDamage);
+    }
+
+    return this.rollDamage(0, maximumDamage);
+  }
+
+  private calculateRangedHitChance(character: CharacterSummary, attacker: Position, target: Position): number {
+    const distanceSkillLevel = Math.max(0, character.skills.distance.level);
+    const tileDistance = this.getChebyshevDistance(attacker, target);
+    const baseHitChance = this.getRangedBaseHitChanceForDistance(tileDistance);
+    const skillBonus = Math.max(0, distanceSkillLevel - RANGED_SKILL_BASELINE) * RANGED_HIT_CHANCE_PER_SKILL_ABOVE_BASELINE;
+    const hitChance = baseHitChance + skillBonus;
+
+    return Math.min(MAXIMUM_RANGED_HIT_CHANCE, Math.max(MINIMUM_RANGED_HIT_CHANCE, hitChance));
+  }
+
+  private getRangedBaseHitChanceForDistance(tileDistance: number): number {
+    if (!Number.isFinite(tileDistance)) {
+      return RANGED_BASE_HIT_CHANCE_BY_DISTANCE[RANGED_BASE_HIT_CHANCE_BY_DISTANCE.length - 1];
+    }
+
+    const normalizedDistance = Math.max(1, Math.floor(tileDistance));
+    const clampedDistance = Math.min(normalizedDistance, RANGED_BASE_HIT_CHANCE_BY_DISTANCE.length - 1);
+    return RANGED_BASE_HIT_CHANCE_BY_DISTANCE[clampedDistance];
+  }
+
+  private getChebyshevDistance(left: Position, right: Position): number {
+    if (left.z !== right.z) {
+      return Number.POSITIVE_INFINITY;
+    }
+
+    return Math.max(Math.abs(left.x - right.x), Math.abs(left.y - right.y));
+  }
+
+  private shuffleArray<TItem>(items: TItem[]): TItem[] {
+    const nextItems = [...items];
+
+    for (let index = nextItems.length - 1; index > 0; index -= 1) {
+      const randomIndex = Math.floor(Math.random() * (index + 1));
+      [nextItems[index], nextItems[randomIndex]] = [nextItems[randomIndex], nextItems[index]];
+    }
+
+    return nextItems;
   }
 
   private rollDefenseReduction(defenseValue: number): number {

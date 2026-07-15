@@ -1,4 +1,4 @@
-import { getMovementCooldownMs, getMovementTweenDurationMs } from "@aldrym/shared";
+import { findPathToTile as findSharedPathToTile, getMovementCooldownMs, getMovementTweenDurationMs } from "@aldrym/shared";
 import type {
   CardinalDirection,
   Corpse,
@@ -12,7 +12,6 @@ import type {
 import Phaser from "phaser";
 
 import {
-  getNextPosition,
   getTileCenter,
   getTileType,
   isWalkableTile,
@@ -85,6 +84,7 @@ export interface MainSceneOptions {
   onAttackMonster?: (monsterId: string) => void;
   onMoveCorpse?: (corpseId: string, position: Position) => void;
   onMoveIntent?: (direction: MoveDirection) => void;
+  onMoveToIntent?: (position: Position) => void;
   onTurnIntent?: (direction: CardinalDirection) => void;
   onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   onOpenCorpse?: (corpseId: string) => void;
@@ -165,6 +165,7 @@ export class MainScene extends Phaser.Scene {
   private readonly onAttackMonster?: (monsterId: string) => void;
   private readonly onMoveCorpse?: (corpseId: string, position: Position) => void;
   private readonly onMoveIntent?: (direction: MoveDirection) => void;
+  private readonly onMoveToIntent?: (position: Position) => void;
   private readonly onTurnIntent?: (direction: CardinalDirection) => void;
   private readonly onMoveGroundItem?: (groundItemId: string, position: Position) => void;
   private readonly onOpenCorpse?: (corpseId: string) => void;
@@ -203,6 +204,7 @@ export class MainScene extends Phaser.Scene {
     this.onAttackMonster = options.onAttackMonster;
     this.onMoveCorpse = options.onMoveCorpse;
     this.onMoveIntent = options.onMoveIntent;
+    this.onMoveToIntent = options.onMoveToIntent;
     this.onTurnIntent = options.onTurnIntent;
     this.onMoveGroundItem = options.onMoveGroundItem;
     this.onOpenCorpse = options.onOpenCorpse;
@@ -298,16 +300,7 @@ export class MainScene extends Phaser.Scene {
       this.clickWalkTarget = null;
       this.pendingAutoInteraction = null;
       this.emitMoveIntent(direction, time);
-      return;
     }
-
-    const clickWalkDirection = this.getClickWalkDirection();
-
-    if (!clickWalkDirection) {
-      return;
-    }
-
-    this.emitMoveIntent(clickWalkDirection, time);
   }
 
   private emitMoveIntent(direction: MoveDirection, time: number): void {
@@ -340,6 +333,7 @@ export class MainScene extends Phaser.Scene {
 
     if (this.isSceneReady) {
       this.syncPlayers(this.pendingPlayers);
+      this.syncClickWalkTarget();
       this.flushPendingAutoInteraction();
     }
   }
@@ -367,7 +361,17 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
-    this.spawnFloatingDamageText(view.container.x, view.container.y - 28, damage);
+    this.spawnFloatingCombatText(view.container.x, view.container.y - 28, String(damage), "#e64d47");
+  }
+
+  showMonsterMiss(monsterId: string): void {
+    const view = this.monsterViews.get(monsterId);
+
+    if (!view) {
+      return;
+    }
+
+    this.spawnFloatingCombatText(view.container.x, view.container.y - 28, "Miss", "#d8c7a0");
   }
 
   showPlayerDamage(characterId: string, damage: number): void {
@@ -377,7 +381,17 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
-    this.spawnFloatingDamageText(view.container.x, view.container.y - 30, damage);
+    this.spawnFloatingCombatText(view.container.x, view.container.y - 30, String(damage), "#e64d47");
+  }
+
+  showPlayerMiss(characterId: string): void {
+    const view = this.playerViews.get(characterId);
+
+    if (!view) {
+      return;
+    }
+
+    this.spawnFloatingCombatText(view.container.x, view.container.y - 30, "Miss", "#d8c7a0");
   }
 
   getTilePositionFromClientPoint(clientX: number, clientY: number): Position | null {
@@ -668,151 +682,48 @@ export class MainScene extends Phaser.Scene {
     return null;
   }
 
-  private getClickWalkDirection(): MoveDirection | null {
-    if (!this.clickWalkTarget) {
-      return null;
-    }
-
-    const localPlayer = this.getLocalPlayerPosition();
-
-    if (!localPlayer || localPlayer.z !== this.clickWalkTarget.z) {
-      this.clickWalkTarget = null;
-      return null;
-    }
-
-    if (this.isSameTile(localPlayer, this.clickWalkTarget)) {
-      this.clickWalkTarget = null;
-      return null;
-    }
-
-    const path = this.findPathToTile(localPlayer, this.clickWalkTarget);
-
-    if (path.length === 0) {
-      this.clickWalkTarget = null;
-      return null;
-    }
-
-    return path[0];
-  }
-
   private findPathToTile(start: Position, target: Position): MoveDirection[] {
     if (!this.isTileAvailableForClickWalk(target)) {
       return [];
     }
 
-    const cardinalPath = this.findPathToTileWithDirections(start, target, cardinalPathMoveDirections);
+    const cardinalPath = findSharedPathToTile({
+      allowedDirections: cardinalPathMoveDirections,
+      isBlocked: (position) => !this.isSameTile(position, target) && !this.isTileAvailableForClickWalk(position),
+      map: this.map,
+      start,
+      target
+    });
 
     if (cardinalPath.length > 0) {
       return cardinalPath;
     }
 
-    return this.findPathToTileWithDirections(start, target, pathMoveDirections);
-  }
-
-  private findPathToTileWithDirections(
-    start: Position,
-    target: Position,
-    allowedDirections: readonly MoveDirection[]
-  ): MoveDirection[] {
-    if (!this.isTileAvailableForClickWalk(target)) {
-      return [];
-    }
-
-    const startKey = this.getPositionKey(start);
-    const targetKey = this.getPositionKey(target);
-    const queue: Position[] = [start];
-    const visited = new Set<string>([startKey]);
-    const cameFrom = new Map<string, { direction: MoveDirection; previousKey: string }>();
-
-    for (let index = 0; index < queue.length; index += 1) {
-      const current = queue[index];
-      const sortedDirections = this.getPathDirectionsToward(current, target, allowedDirections);
-
-      for (const direction of sortedDirections) {
-        const nextPosition = getNextPosition(current, direction);
-        const nextKey = this.getPositionKey(nextPosition);
-
-        if (visited.has(nextKey) || !this.isTileAvailableForClickWalk(nextPosition)) {
-          continue;
-        }
-
-        cameFrom.set(nextKey, {
-          direction,
-          previousKey: this.getPositionKey(current)
-        });
-
-        if (nextKey === targetKey) {
-          return this.reconstructPath(cameFrom, startKey, targetKey);
-        }
-
-        visited.add(nextKey);
-        queue.push(nextPosition);
-      }
-    }
-
-    return [];
-  }
-
-  private getPathDirectionsToward(
-    current: Position,
-    target: Position,
-    allowedDirections: readonly MoveDirection[]
-  ): MoveDirection[] {
-    const deltaX = Math.sign(target.x - current.x);
-    const deltaY = Math.sign(target.y - current.y);
-    const preferredDirections: MoveDirection[] = [];
-
-    if (deltaX < 0 && deltaY < 0 && allowedDirections.includes("up-left")) {
-      preferredDirections.push("up-left");
-    } else if (deltaX > 0 && deltaY < 0 && allowedDirections.includes("up-right")) {
-      preferredDirections.push("up-right");
-    } else if (deltaX < 0 && deltaY > 0 && allowedDirections.includes("down-left")) {
-      preferredDirections.push("down-left");
-    } else if (deltaX > 0 && deltaY > 0 && allowedDirections.includes("down-right")) {
-      preferredDirections.push("down-right");
-    }
-
-    if (deltaY < 0 && allowedDirections.includes("up")) {
-      preferredDirections.push("up");
-    } else if (deltaY > 0 && allowedDirections.includes("down")) {
-      preferredDirections.push("down");
-    }
-
-    if (deltaX < 0 && allowedDirections.includes("left")) {
-      preferredDirections.push("left");
-    } else if (deltaX > 0 && allowedDirections.includes("right")) {
-      preferredDirections.push("right");
-    }
-
-    return [...preferredDirections, ...allowedDirections.filter((direction) => !preferredDirections.includes(direction))];
-  }
-
-  private reconstructPath(
-    cameFrom: Map<string, { direction: MoveDirection; previousKey: string }>,
-    startKey: string,
-    targetKey: string
-  ): MoveDirection[] {
-    const path: MoveDirection[] = [];
-    let currentKey = targetKey;
-
-    while (currentKey !== startKey) {
-      const step = cameFrom.get(currentKey);
-
-      if (!step) {
-        return [];
-      }
-
-      path.unshift(step.direction);
-      currentKey = step.previousKey;
-    }
-
-    return path;
+    return findSharedPathToTile({
+      allowedDirections: pathMoveDirections,
+      isBlocked: (position) => !this.isSameTile(position, target) && !this.isTileAvailableForClickWalk(position),
+      map: this.map,
+      start,
+      target
+    });
   }
 
   private getLocalPlayerPosition(): Position | null {
     const player = this.pendingPlayers.find((worldPlayer) => worldPlayer.characterId === this.localCharacterId);
 
     return player ? { x: player.x, y: player.y, z: player.z } : null;
+  }
+
+  private syncClickWalkTarget(): void {
+    if (!this.clickWalkTarget) {
+      return;
+    }
+
+    const localPlayer = this.getLocalPlayerPosition();
+
+    if (!localPlayer || localPlayer.z !== this.clickWalkTarget.z || this.isSameTile(localPlayer, this.clickWalkTarget)) {
+      this.clickWalkTarget = null;
+    }
   }
 
   private isInDirectContact(left: Pick<Position, "x" | "y" | "z">, right: Pick<Position, "x" | "y" | "z">): boolean {
@@ -850,6 +761,7 @@ export class MainScene extends Phaser.Scene {
     this.pendingAutoInteraction = action;
     this.pressedMovementCodes.clear();
     this.clickWalkTarget = interactionPosition;
+    this.onMoveToIntent?.(interactionPosition);
   }
 
   private findReachableInteractionPosition(localPlayer: Position, source: Position): Position | null {
@@ -965,10 +877,6 @@ export class MainScene extends Phaser.Scene {
 
   private isSameTile(left: Pick<Position, "x" | "y" | "z">, right: Pick<Position, "x" | "y" | "z">): boolean {
     return left.x === right.x && left.y === right.y && left.z === right.z;
-  }
-
-  private getPositionKey(position: Pick<Position, "x" | "y" | "z">): string {
-    return `${position.x}:${position.y}:${position.z}`;
   }
 
   private isMovementCode(code: string): boolean {
@@ -1142,12 +1050,17 @@ export class MainScene extends Phaser.Scene {
       return;
     }
 
-    if (pointer.button !== 0 || !this.onMoveIntent) {
+    if (pointer.button !== 0 || !this.onMoveToIntent) {
       return;
     }
 
     this.pressedMovementCodes.clear();
+    this.pendingAutoInteraction = null;
     this.clickWalkTarget = this.isTileAvailableForClickWalk(position) ? position : null;
+
+    if (this.clickWalkTarget) {
+      this.onMoveToIntent?.(this.clickWalkTarget);
+    }
   };
 
   private getTilePositionFromWorldPoint(worldX: number, worldY: number): Position | null {
@@ -1875,26 +1788,26 @@ export class MainScene extends Phaser.Scene {
     return label;
   }
 
-  private spawnFloatingDamageText(x: number, y: number, damage: number): void {
-    const damageText = this.add.text(x, y, String(damage), {
-      color: "#e64d47",
+  private spawnFloatingCombatText(x: number, y: number, text: string, color: string): void {
+    const combatText = this.add.text(x, y, text, {
+      color,
       fontFamily: "Georgia",
       fontSize: "14px",
       stroke: "#120c08",
       strokeThickness: 3
     });
 
-    damageText.setDepth(120);
-    damageText.setOrigin(0.5, 1);
+    combatText.setDepth(120);
+    combatText.setOrigin(0.5, 1);
 
     this.tweens.add({
-      targets: damageText,
+      targets: combatText,
       alpha: 0,
       duration: 720,
       ease: "Sine.easeOut",
       y: y - 18,
       onComplete: () => {
-        damageText.destroy();
+        combatText.destroy();
       }
     });
   }

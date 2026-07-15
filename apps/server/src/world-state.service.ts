@@ -83,7 +83,7 @@ const initialMonsterSpawns: MonsterSpawn[] = [
     name: "Troll",
     level: 2,
     armor: 6,
-    maxDamage: 15,
+    maxDamage: 10,
     maxHealth: 50,
     experienceReward: 20,
     position: { x: 24, y: 12, z: 0 },

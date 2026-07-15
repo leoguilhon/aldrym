@@ -19,13 +19,15 @@ The current playable scope is a server-authoritative PvE vertical slice on the l
 - The current local-map spawn set is intentionally minimal and uses a single troll. The previous rat respawn was removed.
 - Players select a visible monster for auto-attack by right-clicking it, or by pressing Space to target the nearest visible monster
 - Pressing Space stops the current auto-attack target when one is active
+- Left-clicking a walkable tile starts a server-authoritative click-to-move route that keeps progressing until the destination is reached or a new input cancels it
 - Auto-attack damage only lands while the selected target is on an adjacent tile, including diagonals
 - The server owns both the player attack cadence and the monster retaliation cadence
 - Melee attack, defense, armor, health, mana, experience, and skill progression follow a Tibia-inspired structure, including class-relative skill advancement requirements
+- Melee hit outcomes come from a `0..max` skill-scaled damage roll, while ranged attacks use a distance-based hit chance curve with distance skill scaling and are intentionally much less reliable at point-blank range
 - Characters persist progress for fist, sword, axe, club, distance, shielding, magic level, and fishing
 - Offensive, balanced, and defensive fight stances modify the authoritative attack and defense output
 - Equipped items contribute combat values through `attack`, `defense`, shield modifiers, and armor
-- Monsters follow the nearest player within 8 SQM and remain still when no player is close enough
+- Monsters follow the nearest player within 8 SQM, react correctly to diagonal ranged attacks, and wander naturally near their spawn when no player is close enough
 - The current troll retreats at low health, respawns after 30 seconds, and can drop gold, meat, or a dagger
 - Alive monsters occupy their tile and cannot be walked through by players
 - Defeated monsters grant experience to the attacking character, leave a corpse on the map, show a respawn warning shortly before returning, and respawn at their original spawn position after a short delay

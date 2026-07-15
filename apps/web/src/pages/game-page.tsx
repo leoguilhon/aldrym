@@ -1,6 +1,7 @@
 import type {
   CardinalDirection,
   CharacterDamagedEvent,
+  CharacterMissedEvent,
   CharacterSkillState,
   CharacterSummary,
   ChaseMode,
@@ -585,7 +586,9 @@ function GameViewport({
   corpses,
   groundItems,
   lastCharacterDamage,
+  lastCharacterMiss,
   lastMonsterDamage,
+  lastMonsterMiss,
   localCharacterId,
   monsters,
   noticeMessage,
@@ -595,6 +598,7 @@ function GameViewport({
   onMoveCorpse,
   onMoveGroundItem,
   onMoveIntent,
+  onMoveToIntent,
   onTurnIntent,
   onOpenCorpse,
   onShowNotice,
@@ -606,7 +610,9 @@ function GameViewport({
   corpses: Corpse[];
   groundItems: GroundItem[];
   lastCharacterDamage: { characterId: string; damage: number; nonce: number } | null;
+  lastCharacterMiss: { characterId: string; nonce: number } | null;
   lastMonsterDamage: { damage: number; monsterId: string; nonce: number } | null;
+  lastMonsterMiss: { monsterId: string; nonce: number } | null;
   localCharacterId: string;
   monsters: WorldMonster[];
   noticeMessage: string | null;
@@ -616,6 +622,7 @@ function GameViewport({
   onMoveCorpse: (corpseId: string, position: Position) => void;
   onMoveGroundItem: (groundItemId: string, position: Position) => void;
   onMoveIntent: (direction: MoveDirection) => void;
+  onMoveToIntent: (position: Position) => void;
   onTurnIntent: (direction: CardinalDirection) => void;
   onOpenCorpse: (corpseId: string) => void;
   onShowNotice: (message: string) => void;
@@ -636,7 +643,9 @@ function GameViewport({
     setMonsters: (nextMonsters: WorldMonster[]) => void;
     setPlayers: (nextPlayers: WorldPlayer[]) => void;
     showMonsterDamage: (monsterId: string, damage: number) => void;
+    showMonsterMiss: (monsterId: string) => void;
     showPlayerDamage: (characterId: string, damage: number) => void;
+    showPlayerMiss: (characterId: string) => void;
   } | null>(null);
   const activeCombatMonsterIdRef = useRef(activeCombatMonsterId);
   const attackMonsterRef = useRef(onAttackMonster);
@@ -646,6 +655,7 @@ function GameViewport({
   const moveGroundItemRef = useRef(onMoveGroundItem);
   const moveCorpseRef = useRef(onMoveCorpse);
   const moveIntentRef = useRef(onMoveIntent);
+  const moveToIntentRef = useRef(onMoveToIntent);
   const turnIntentRef = useRef(onTurnIntent);
   const openCorpseRef = useRef(onOpenCorpse);
   const playersRef = useRef(players);
@@ -684,12 +694,28 @@ function GameViewport({
   }, [lastMonsterDamage]);
 
   useEffect(() => {
+    if (!lastMonsterMiss) {
+      return;
+    }
+
+    gameRef.current?.showMonsterMiss(lastMonsterMiss.monsterId);
+  }, [lastMonsterMiss]);
+
+  useEffect(() => {
     if (!lastCharacterDamage) {
       return;
     }
 
     gameRef.current?.showPlayerDamage(lastCharacterDamage.characterId, lastCharacterDamage.damage);
   }, [lastCharacterDamage]);
+
+  useEffect(() => {
+    if (!lastCharacterMiss) {
+      return;
+    }
+
+    gameRef.current?.showPlayerMiss(lastCharacterMiss.characterId);
+  }, [lastCharacterMiss]);
 
   useEffect(() => {
     monstersRef.current = monsters;
@@ -707,6 +733,10 @@ function GameViewport({
   useEffect(() => {
     moveIntentRef.current = onMoveIntent;
   }, [onMoveIntent]);
+
+  useEffect(() => {
+    moveToIntentRef.current = onMoveToIntent;
+  }, [onMoveToIntent]);
 
   useEffect(() => {
     turnIntentRef.current = onTurnIntent;
@@ -773,6 +803,7 @@ function GameViewport({
         onMoveCorpse: (corpseId, position) => moveCorpseRef.current(corpseId, position),
         onMoveGroundItem: (groundItemId, position) => moveGroundItemRef.current(groundItemId, position),
         onMoveIntent: (direction) => moveIntentRef.current(direction),
+        onMoveToIntent: (position) => moveToIntentRef.current(position),
         onTurnIntent: (direction) => turnIntentRef.current(direction),
         onOpenCorpse: (corpseId) => openCorpseRef.current(corpseId),
         onShowNotice: (message) => showNoticeRef.current(message),
@@ -1408,7 +1439,9 @@ export function GamePage() {
   const [groundItems, setGroundItems] = useState<GroundItem[]>([]);
   const [isLoadingCharacter, setIsLoadingCharacter] = useState(true);
   const [lastCharacterDamage, setLastCharacterDamage] = useState<{ characterId: string; damage: number; nonce: number } | null>(null);
+  const [lastCharacterMiss, setLastCharacterMiss] = useState<{ characterId: string; nonce: number } | null>(null);
   const [lastMonsterDamage, setLastMonsterDamage] = useState<{ damage: number; monsterId: string; nonce: number } | null>(null);
+  const [lastMonsterMiss, setLastMonsterMiss] = useState<{ monsterId: string; nonce: number } | null>(null);
   const [lootErrorMessage, setLootErrorMessage] = useState<string | null>(null);
   const [monsters, setMonsters] = useState<WorldMonster[]>([]);
   const [openedCorpses, setOpenedCorpses] = useState<Corpse[]>([]);
@@ -1545,6 +1578,13 @@ export function GamePage() {
       );
     });
 
+    socket.on(worldEventNames.monsterMissed, (payload) => {
+      setLastMonsterMiss({
+        monsterId: payload.monsterId,
+        nonce: Date.now()
+      });
+    });
+
     socket.on(worldEventNames.monsterDied, (payload) => {
       setMonsters((currentMonsters) => upsertWorldMonster(currentMonsters, payload.monster));
       setActiveCombatMonsterId((currentMonsterId) =>
@@ -1650,6 +1690,13 @@ export function GamePage() {
       setLastCharacterDamage({
         characterId: payload.characterId,
         damage: payload.damage,
+        nonce: Date.now()
+      });
+    });
+
+    socket.on(worldEventNames.characterMissed, (payload: CharacterMissedEvent) => {
+      setLastCharacterMiss({
+        characterId: payload.characterId,
         nonce: Date.now()
       });
     });
@@ -1912,6 +1959,21 @@ export function GamePage() {
     }
 
     socket.emit(worldEventNames.playerMove, { direction });
+  };
+
+  const handleMoveToIntent = (position: Position) => {
+    const socket = socketRef.current;
+
+    if (!socket || !socket.connected || connectionState !== "joined") {
+      return;
+    }
+
+    if (chaseMode === "follow") {
+      setChaseMode("stand");
+      socket.emit(worldEventNames.combatSetChaseMode, { mode: "stand" });
+    }
+
+    socket.emit(worldEventNames.playerMoveTo, { position });
   };
 
   const handleTurnIntent = (direction: CardinalDirection) => {
@@ -2435,7 +2497,9 @@ export function GamePage() {
                 corpses={corpses}
                 groundItems={groundItems}
                 lastCharacterDamage={lastCharacterDamage}
+                lastCharacterMiss={lastCharacterMiss}
                 lastMonsterDamage={lastMonsterDamage}
+                lastMonsterMiss={lastMonsterMiss}
                 localCharacterId={character.id}
                 monsters={monsters}
                 noticeMessage={feedbackMessage}
@@ -2445,6 +2509,7 @@ export function GamePage() {
                 onMoveCorpse={handleMoveCorpse}
                 onMoveGroundItem={handleMoveGroundItem}
                 onMoveIntent={handleMoveIntent}
+                onMoveToIntent={handleMoveToIntent}
                 onTurnIntent={handleTurnIntent}
                 onOpenCorpse={handleOpenCorpse}
                 onShowNotice={setFeedbackMessage}

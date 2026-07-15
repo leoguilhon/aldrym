@@ -31,9 +31,10 @@
 - The client opens a Socket.IO connection with the JWT token in the connection auth payload
 - `apps/server` authenticates sockets, verifies character ownership on `world:join`, and tracks online players in a small in-memory world state
 - The authoritative world session now has two layers: live player position, combat lock, and monster contact stay in memory, while a persisted `Character.activeWorldSession` flag prevents the same account from selecting a second character until the active world session ends
-- Movement is intent-based: the client sends directions and the server calculates the next tile using the shared map rules
+- Movement is intent-based: the client sends one-step directions for manual walking and tile destinations for click-to-move, and the server calculates each authoritative step using the shared map rules
 - Player facing is server-authored as part of `WorldPlayer`; the client can also send an in-place turn intent without changing position
 - Movement pace is controlled by a shared level-based curve and enforced by the server before accepting the next tile step
+- Click-to-move is server-owned after the initial destination request, so autowalk keeps progressing even if the browser render loop is paused in a background tab
 - The same shared local map definition is used for spawn clamping and blocked-tile validation on both the frontend and backend
 - Alive monsters occupy tiles and block player movement on the authoritative server
 - Character position is saved to PostgreSQL only when a world session is finalized; normal step-by-step movement stays in server memory
@@ -43,10 +44,10 @@
 - Combat is session-based: the client sends only a targeted visible monster id or stop intent, and the server owns the auto-attack loop
 - The server validates screen-range targetability, monster life state, and authenticated world join state before starting combat. Active combat continues until stopped, the target dies, the target is lost, or the monster leaves the player's screen-range target area.
 - Player melee hits are still gated by adjacent range on every combat tick, while monsters retaliate through their own server-owned pursuit and attack loop.
-- Attack, defense, and armor resolution now follow a Tibia-inspired structure: attack value is derived from level, active weapon skill, weapon attack, and fight stance; defense value is derived from weapon or shield defense, the corresponding defense skill, and fight stance; armor reduces the remaining damage through a random reduction range based on total equipped armor.
+- Attack, defense, and armor resolution now follow a Tibia-inspired structure: melee attacks roll damage from zero up to a skill-derived maximum, ranged attacks use a distance-based hit chance curve plus distance skill scaling before rolling damage, defense value is derived from weapon or shield defense plus the corresponding defense skill and fight stance, and armor reduces the remaining damage through a random reduction range based on total equipped armor.
 - Character skills are persisted per weapon family plus shielding, magic level, and fishing. Skill progression requirements are class-relative and use Tibia-inspired exponential point requirements.
 - Equipment stats are server-authored through shared item definitions. Weapon `attack`, weapon or shield `defense`, shield modifiers, and armor pieces all feed the authoritative combat calculation.
-- Monsters follow the nearest player within 8 SQM with server-authoritative tile movement and remain still when no player is close enough. The current troll spawn retreats when it reaches its low-health threshold.
+- Monsters follow the nearest player within an 8-SQM Tibia-like tile radius with server-authoritative movement, react correctly to diagonal ranged pressure, and wander around their spawn when no player is worth chasing. The current troll spawn retreats when it reaches its low-health threshold.
 - Defeated monsters are kept in memory as corpses, show a client respawn warning shortly before returning, respawn after their configured delay at their original spawn tile, and are not persisted to PostgreSQL
 - Character experience, level-up stat changes, skill progression, and food timer changes are persisted to PostgreSQL when they change
 - Defeated monsters roll server-side loot tables into in-memory corpse contents. The current local-map slice removed the old rat spawn and uses a single troll with a longer 30-second respawn.
